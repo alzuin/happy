@@ -74,10 +74,15 @@ export function useSessionStatus(session: Session): SessionStatus {
 }
 
 /**
- * Extracts a display name from a session's metadata path.
- * Returns the last segment of the path, or 'unknown' if no path is available.
+ * Display name precedence: user-supplied override → metadata.summary → last path segment → unknown.
+ * Pass `userSetName` from the synced `userSetSessionNames` setting (keyed by session id).
+ * Trim/empty values are ignored so renaming to "" falls back to the derived name.
  */
-export function getSessionName(session: Session): string {
+export function getSessionName(session: Session, userSetName?: string | null): string {
+    const trimmed = userSetName?.trim();
+    if (trimmed) {
+        return trimmed;
+    }
     if (session.metadata?.summary) {
         return session.metadata.summary.text;
     } else if (session.metadata) {

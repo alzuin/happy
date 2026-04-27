@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, FlatList } from 'react-native';
 import { Text } from '@/components/StyledText';
-import { useAllSessions } from '@/sync/storage';
+import { useAllSessions, useSetting } from '@/sync/storage';
 import { Session } from '@/sync/storageTypes';
 import { Avatar } from '@/components/Avatar';
 import { getSessionName, getSessionSubtitle, getSessionAvatarId } from '@/utils/sessionUtils';
@@ -164,6 +164,7 @@ export default function SessionHistory() {
     const safeArea = useSafeAreaInsets();
     const allSessions = useAllSessions();
     const navigateToSession = useNavigateToSession();
+    const userSetSessionNames = useSetting('userSetSessionNames');
     
     const groupedItems = React.useMemo(() => {
         return groupSessionsByDate(allSessions);
@@ -182,7 +183,7 @@ export default function SessionHistory() {
         
         if (item.type === 'session' && item.session) {
             const session = item.session;
-            const sessionName = getSessionName(session);
+            const sessionName = getSessionName(session, userSetSessionNames?.[session.id]);
             const sessionSubtitle = getSessionSubtitle(session);
             const avatarId = getSessionAvatarId(session);
             
@@ -218,7 +219,7 @@ export default function SessionHistory() {
         }
         
         return null;
-    }, [groupedItems, navigateToSession]);
+    }, [groupedItems, navigateToSession, userSetSessionNames]);
     
     const keyExtractor = React.useCallback((item: SessionHistoryItem, index: number) => {
         if (item.type === 'date-header') {

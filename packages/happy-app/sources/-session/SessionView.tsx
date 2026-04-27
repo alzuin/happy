@@ -66,6 +66,7 @@ export const SessionView = React.memo((props: { id: string }) => {
     const { width: windowWidth } = useWindowDimensions();
     const [sessionActionsAnchor, setSessionActionsAnchor] = React.useState<SessionActionsAnchor | null>(null);
     const fileDiffsSidebarEnabled = useSetting('fileDiffsSidebar');
+    const userSetSessionNames = useSetting('userSetSessionNames');
 
     const showSidebar = fileDiffsSidebarEnabled
         && (isRunningOnMac() || Platform.OS === 'web')
@@ -137,7 +138,7 @@ export const SessionView = React.memo((props: { id: string }) => {
 
         const isConnected = session.presence === 'online';
         return {
-            title: getSessionName(session),
+            title: getSessionName(session, userSetSessionNames?.[session.id]),
             subtitle: session.metadata?.path ? formatPathRelativeToHome(session.metadata.path, session.metadata?.homeDir) : undefined,
             avatarId: getSessionAvatarId(session),
             onAvatarPress: () => router.push(`/session/${sessionId}/info`),
@@ -145,7 +146,7 @@ export const SessionView = React.memo((props: { id: string }) => {
             flavor: session.metadata?.flavor || null,
             tintColor: isConnected ? '#000' : '#8E8E93'
         };
-    }, [session, isDataReady, sessionId, router]);
+    }, [session, isDataReady, sessionId, router, userSetSessionNames]);
 
     const mainContent = (
         <>

@@ -56,6 +56,7 @@ export const SettingsSchema = z.object({
             openclaw: z.boolean().optional(),
         }).default({}),
     }).default({ perMachine: {}, global: {} }).describe('Tracks which CLI installation warnings user has dismissed (per-machine or globally)'),
+    userSetSessionNames: z.record(z.string(), z.string()).default({}).describe('User-supplied names for sessions, overriding auto-derived summary/path. Keyed by session id.'),
 });
 
 //
@@ -107,6 +108,7 @@ export const settingsDefaults: Settings = {
     lastUsedPermissionMode: null,
     lastUsedModelMode: null,
     dismissedCLIWarnings: { perMachine: {}, global: {} },
+    userSetSessionNames: {},
 };
 Object.freeze(settingsDefaults);
 

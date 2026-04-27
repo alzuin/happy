@@ -5,7 +5,7 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { Typography } from '@/constants/Typography';
-import { useSessions, useAllMachines, useMachine } from '@/sync/storage';
+import { useSessions, useAllMachines, useMachine, useSetting } from '@/sync/storage';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import type { Session } from '@/sync/storageTypes';
 import { machineStopDaemon, machineUpdateMetadata, machineDelete } from '@/sync/ops';
@@ -69,6 +69,7 @@ export default function MachineDetailScreen() {
     const sessions = useSessions();
     const machine = useMachine(machineId!);
     const navigateToSession = useNavigateToSession();
+    const userSetSessionNames = useSetting('userSetSessionNames');
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isStoppingDaemon, setIsStoppingDaemon] = useState(false);
     const [isRenamingMachine, setIsRenamingMachine] = useState(false);
@@ -568,7 +569,7 @@ export default function MachineDetailScreen() {
                         {previousSessions.map(session => (
                             <Item
                                 key={session.id}
-                                title={getSessionName(session)}
+                                title={getSessionName(session, userSetSessionNames?.[session.id])}
                                 subtitle={getSessionSubtitle(session)}
                                 onPress={() => navigateToSession(session.id)}
                                 rightElement={<Ionicons name="chevron-forward" size={20} color="#C7C7CC" />}

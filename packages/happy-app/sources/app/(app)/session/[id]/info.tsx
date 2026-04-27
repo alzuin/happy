@@ -7,7 +7,7 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { Avatar } from '@/components/Avatar';
-import { useSession, useIsDataReady } from '@/sync/storage';
+import { useSession, useIsDataReady, useSetting } from '@/sync/storage';
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId, getResumeCommand } from '@/utils/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
@@ -127,7 +127,8 @@ function SessionInfoContent({ session }: { session: Session }) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const devModeEnabled = __DEV__;
-    const sessionName = getSessionName(session);
+    const userSetSessionNames = useSetting('userSetSessionNames');
+    const sessionName = getSessionName(session, userSetSessionNames?.[session.id]);
     const sessionStatus = useSessionStatus(session);
     const {
         canShowResume,

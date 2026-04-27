@@ -5,6 +5,7 @@ import { Modal } from '@/modal';
 import { machineResumeSession, sessionArchive, sessionKill } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
+import { getSessionName } from '@/utils/sessionUtils';
 import { Machine, Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
@@ -195,11 +196,41 @@ export function useSessionQuickActions(
         performResume();
     }, [performResume]);
 
+    const renameSession = React.useCallback(() => {
+        void (async () => {
+            const current = storage.getState().settings.userSetSessionNames?.[session.id];
+            const fallbackName = getSessionName(session);
+            const next = await Modal.prompt(
+                'Rename chat',
+                undefined,
+                {
+                    placeholder: fallbackName,
+                    defaultValue: current ?? '',
+                    confirmText: t('common.ok'),
+                    cancelText: t('common.cancel'),
+                },
+            );
+            if (next === null) {
+                return;
+            }
+            const trimmed = next.trim();
+            const existing = storage.getState().settings.userSetSessionNames ?? {};
+            const nextMap: Record<string, string> = { ...existing };
+            if (trimmed) {
+                nextMap[session.id] = trimmed;
+            } else {
+                delete nextMap[session.id];
+            }
+            sync.applySettings({ userSetSessionNames: nextMap });
+        })();
+    }, [session]);
+
     const canCopySessionMetadata = __DEV__ || devModeEnabled;
 
     const actionItems = React.useMemo<SessionActionItem[]>(() => {
         const items: SessionActionItem[] = [
             { id: 'details', icon: 'information-circle-outline', label: t('profile.details'), onPress: openDetails },
+            { id: 'rename', icon: 'create-outline', label: 'Rename', onPress: renameSession },
         ];
 
         if (resumeAvailability.canShowResume) {
@@ -220,6 +251,7 @@ export function useSessionQuickActions(
         copySessionMetadata,
         copySessionMetadataAndLogs,
         openDetails,
+        renameSession,
         resumeAvailability.canShowResume,
         resumeSession,
     ]);
@@ -246,6 +278,7 @@ export function useSessionQuickActions(
         copySessionMetadata,
         copySessionMetadataAndLogs,
         openDetails,
+        renameSession,
         resumeSession,
         resumeSessionSubtitle: resumeAvailability.subtitle,
         resumingSession,

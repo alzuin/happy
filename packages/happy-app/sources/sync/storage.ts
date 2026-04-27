@@ -91,7 +91,7 @@ export interface SessionRowData {
     totalTodosCount: number;
 }
 
-function buildSessionRowData(session: Session): SessionRowData {
+function buildSessionRowData(session: Session, userSetName?: string | null): SessionRowData {
     const isOnline = session.presence === "online";
     const hasPermissions = !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
 
@@ -108,7 +108,7 @@ function buildSessionRowData(session: Session): SessionRowData {
 
     return {
         id: session.id,
-        name: getSessionName(session),
+        name: getSessionName(session, userSetName),
         subtitle: getSessionSubtitle(session),
         avatarId: getSessionAvatarId(session),
         flavor: session.metadata?.flavor ?? null,
@@ -224,7 +224,8 @@ interface StorageState {
 
 // Helper function to build unified list view data from sessions and machines
 function buildSessionListViewData(
-    sessions: Record<string, Session>
+    sessions: Record<string, Session>,
+    userSetSessionNames: Record<string, string> = {}
 ): SessionListViewItem[] {
     // Separate active and inactive sessions
     const activeSessions: Session[] = [];
@@ -247,7 +248,7 @@ function buildSessionListViewData(
 
     // Add active sessions as a single item at the top (if any)
     if (activeSessions.length > 0) {
-        listData.push({ type: 'active-sessions', sessions: activeSessions.map(buildSessionRowData) });
+        listData.push({ type: 'active-sessions', sessions: activeSessions.map(s => buildSessionRowData(s, userSetSessionNames[s.id])) });
     }
 
     // Group inactive sessions by date
@@ -281,7 +282,7 @@ function buildSessionListViewData(
 
                 listData.push({ type: 'header', title: headerTitle });
                 currentDateGroup.forEach(sess => {
-                    listData.push({ type: 'session', session: buildSessionRowData(sess) });
+                    listData.push({ type: 'session', session: buildSessionRowData(sess, userSetSessionNames[sess.id]) });
                 });
             }
 
@@ -311,7 +312,7 @@ function buildSessionListViewData(
 
         listData.push({ type: 'header', title: headerTitle });
         currentDateGroup.forEach(sess => {
-            listData.push({ type: 'session', session: buildSessionRowData(sess) });
+            listData.push({ type: 'session', session: buildSessionRowData(sess, userSetSessionNames[sess.id]) });
         });
     }
 
@@ -540,7 +541,8 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Build new unified list view data
             const sessionListViewData = buildSessionListViewData(
-                mergedSessions
+                mergedSessions,
+                state.settings.userSetSessionNames
             );
 
             // Update project manager with current sessions and machines
@@ -754,19 +756,28 @@ export const storage = create<StorageState>()((set, get) => {
             return result;
         }),
         applySettingsLocal: (settings: Partial<Settings>) => set((state) => {
-            saveSettings(applySettings(state.settings, settings), state.settingsVersion ?? 0);
+            const next = applySettings(state.settings, settings);
+            saveSettings(next, state.settingsVersion ?? 0);
+            const namesChanged = next.userSetSessionNames !== state.settings.userSetSessionNames;
             return {
                 ...state,
-                settings: applySettings(state.settings, settings)
+                settings: next,
+                ...(namesChanged && {
+                    sessionListViewData: buildSessionListViewData(state.sessions, next.userSetSessionNames),
+                }),
             };
         }),
         applySettings: (settings: Settings, version: number) => set((state) => {
             if (state.settingsVersion === null || state.settingsVersion < version) {
                 saveSettings(settings, version);
+                const namesChanged = settings.userSetSessionNames !== state.settings.userSetSessionNames;
                 return {
                     ...state,
                     settings,
-                    settingsVersion: version
+                    settingsVersion: version,
+                    ...(namesChanged && {
+                        sessionListViewData: buildSessionListViewData(state.sessions, settings.userSetSessionNames),
+                    }),
                 };
             } else {
                 return state;
@@ -916,7 +927,7 @@ export const storage = create<StorageState>()((set, get) => {
             return {
                 ...state,
                 sessions: updatedSessions,
-                sessionListViewData: buildSessionListViewData(updatedSessions)
+                sessionListViewData: buildSessionListViewData(updatedSessions, state.settings.userSetSessionNames)
             };
         }),
         updateSessionPermissionMode: (sessionId: string, mode: string) => set((state) => {
@@ -1037,7 +1048,8 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Rebuild sessionListViewData to reflect machine changes
             const sessionListViewData = buildSessionListViewData(
-                state.sessions
+                state.sessions,
+                state.settings.userSetSessionNames
             );
 
             return {
@@ -1054,7 +1066,7 @@ export const storage = create<StorageState>()((set, get) => {
             return {
                 ...state,
                 machines: remaining,
-                sessionListViewData: buildSessionListViewData(state.sessions)
+                sessionListViewData: buildSessionListViewData(state.sessions, state.settings.userSetSessionNames)
             };
         }),
         // Artifact methods
@@ -1131,7 +1143,7 @@ export const storage = create<StorageState>()((set, get) => {
             saveSessionEffortLevels(effortLevels);
             
             // Rebuild sessionListViewData without the deleted session
-            const sessionListViewData = buildSessionListViewData(remainingSessions);
+            const sessionListViewData = buildSessionListViewData(remainingSessions, state.settings.userSetSessionNames);
             
             return {
                 ...state,
