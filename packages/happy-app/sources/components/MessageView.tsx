@@ -75,7 +75,7 @@ function UserTextBlock(props: {
 
   return (
     <View style={styles.userMessageContainer}>
-      <View style={styles.userMessageBubble}>
+      <View style={styles.userMessageBubble} dataSet={{ selectable: 'true' }}>
         <MarkdownView markdown={props.message.displayText || props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
         {/* {__DEV__ && (
           <Text style={styles.debugText}>{JSON.stringify(props.message.meta)}</Text>
@@ -99,7 +99,7 @@ function AgentTextBlock(props: {
   }
 
   return (
-    <View style={styles.agentMessageContainer}>
+    <View style={styles.agentMessageContainer} dataSet={{ selectable: 'true' }}>
       <MarkdownView markdown={props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
     </View>
   );
@@ -158,7 +158,7 @@ function ToolCallBlock(props: {
     return null;
   }
   return (
-    <View style={styles.toolContainer}>
+    <View style={styles.toolContainer} dataSet={{ selectable: 'true' }}>
       <ToolView
         tool={props.message.tool}
         metadata={props.metadata}

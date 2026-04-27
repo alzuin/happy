@@ -11,7 +11,8 @@ const DESKTOP_CSS = `
         user-select: none;
         -webkit-user-select: none;
     }
-    input, textarea, [contenteditable="true"], [contenteditable=""] {
+    input, textarea, [contenteditable="true"], [contenteditable=""],
+    [data-selectable="true"], [data-selectable="true"] * {
         user-select: text;
         -webkit-user-select: text;
     }
