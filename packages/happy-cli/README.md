@@ -32,13 +32,23 @@ This will:
 
 ```
 happy codex
-happy gemini
+happy agy        # Antigravity CLI (Gemini's successor)
+happy gemini     # deprecated — use `happy agy`
 happy openclaw
 
 # or any ACP-compatible CLI
 happy acp opencode
 happy acp -- custom-agent --flag
 ```
+
+> **Note on agy permissions:** the agy backend runs `agy --print`, which is
+> one-shot and has no interactive approval surface — tool calls proceed
+> automatically without ever prompting you. The permission mode you pick in
+> Happy only chooses which flag is passed to agy: the default modes use
+> `--sandbox`, and the bypass/yolo-style modes (including `acceptEdits`) use
+> `--dangerously-skip-permissions`. Neither adds a per-tool approval gate
+> inside Happy, so selecting "default" for an agy session does **not** give
+> you an approval prompt the way it does for Claude Code.
 
 ## Daemon
 
@@ -52,6 +62,28 @@ happy daemon list
 ```
 
 The daemon starts automatically when you run `happy`, so you usually don't need to manage it manually.
+
+### Keeping the daemon running across reboots
+
+If you want the daemon to come back automatically after a reboot — without opening a `happy` session first — start it from your shell profile so it inherits your normal user session context (PATH, keychain access, OAuth credentials):
+
+```bash
+# ~/.zshrc or ~/.bashrc
+if [[ -o interactive ]] && [[ -z "$HAPPY_DAEMON_CHECKED" ]]; then
+    export HAPPY_DAEMON_CHECKED=1
+    () {
+        local state=$HOME/.happy/daemon.state.json
+        local pid=$(grep -oE '"pid"[[:space:]]*:[[:space:]]*[0-9]+' "$state" 2>/dev/null | grep -oE '[0-9]+')
+        if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+            happy daemon start >/dev/null 2>&1
+        fi
+    } &!
+fi
+```
+
+The first interactive shell after a reboot triggers the start; subsequent shells short-circuit because the daemon is already running.
+
+> **macOS users:** prefer this shell-init approach over a `launchd` LaunchAgent. A LaunchAgent runs in an agent domain that is **detached from your GUI/Aqua login session**, which means the bundled `claude-agent-sdk` cannot reach the macOS keychain and silently fails authentication ("Failed to authenticate. API Error: 401 terminated", `duration_api_ms: 0`). If you must use launchd, your wrapper has to read the OAuth access token from `~/.claude/.credentials.json` and export it as `CLAUDE_CODE_OAUTH_TOKEN` before exec'ing the daemon — and you'll need to handle token rotation yourself.
 
 ## Authentication
 
@@ -77,7 +109,8 @@ happy connect status
 |---------|-------------|
 | `happy` | Start Claude Code session (default) |
 | `happy codex` | Start Codex mode |
-| `happy gemini` | Start Gemini CLI session |
+| `happy agy` | Start agy (Antigravity CLI) session |
+| `happy gemini` | Start Gemini CLI session (**deprecated** — use `happy agy`) |
 | `happy openclaw` | Start OpenClaw session |
 | `happy acp` | Start any ACP-compatible agent |
 | `happy resume <id>` | Resume a previous session |
@@ -122,7 +155,8 @@ yarn workspace happy cli --help
 - Node.js >= 20.0.0
 - For Claude: `claude` CLI installed & logged in
 - For Codex: `codex` CLI installed & logged in
-- For Gemini: `npm install -g @google/gemini-cli` + `happy connect gemini`
+- For agy: install the Antigravity CLI (`agy`) and log in
+- For Gemini (**deprecated** — use agy): `npm install -g @google/gemini-cli` + `happy connect gemini`
 
 ## License
 

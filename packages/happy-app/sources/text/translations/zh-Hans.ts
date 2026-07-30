@@ -85,12 +85,14 @@ export const zhHans: TranslationStructure = {
         permissionRequired: '需要权限',
         activeNow: '当前活跃',
         unknown: '未知',
+        unread: '新结果',
     },
 
     time: {
         justNow: '刚刚',
         minutesAgo: ({ count }: { count: number }) => `${count} 分钟前`,
         hoursAgo: ({ count }: { count: number }) => `${count} 小时前`,
+        daysAgo: ({ count }: { count: number }) => `${count} 天前`,
     },
 
     connect: {
@@ -160,6 +162,27 @@ export const zhHans: TranslationStructure = {
             light: '始终使用浅色主题',
             dark: '始终使用深色主题',
         },
+        chat: '聊天',
+        chatDescription: '自定义聊天消息外观',
+        sessionStatusBar: '会话状态信息',
+        sessionStatusBarDescription: '选择分支、模型、工作量和上下文的显示位置',
+        sessionStatusDisplayOptions: {
+            hidden: '隐藏',
+            above: '输入框上方',
+            below: '输入框下方',
+        },
+        usageLimitShowRemaining: '显示剩余额度',
+        usageLimitShowRemainingDescription: '额度指示器显示剩余量，而不是已用量',
+        userMessageBubbleColor: '用户气泡颜色',
+        userMessageBubbleColorDescription: '让您的消息在长聊天中更容易找到',
+        userMessageBubbleColorOptions: {
+            blue: '蓝色',
+            green: '绿色',
+            purple: '紫色',
+            rose: '玫瑰色',
+            sand: '沙色',
+            gray: '灰色',
+        },
         display: '显示',
         displayDescription: '控制布局和间距',
         inlineToolCalls: '内联工具调用',
@@ -210,11 +233,15 @@ export const zhHans: TranslationStructure = {
         markdownCopyV2Subtitle: '长按打开复制模态框',
         hideInactiveSessions: '隐藏非活跃会话',
         hideInactiveSessionsSubtitle: '仅在列表中显示活跃的聊天',
+        groupToolCalls: '分组工具调用',
+        groupToolCallsSubtitle: '将连续的工具调用折叠到一个容器中',
         privacy: '隐私',
         privacyDescription: '完全禁用所有分析和遥测。不会向 PostHog 或任何其他跟踪服务发送数据。',
         disableAnalytics: '禁用分析',
         analyticsDisabled: '所有跟踪和遥测已禁用',
         analyticsEnabled: '匿名使用分析已启用',
+        imageUpload: '图片上传',
+        imageUploadSubtitle: '将图片附加到消息中，以便受支持的代理进行分析',
     },
 
     errors: {
@@ -287,6 +314,26 @@ export const zhHans: TranslationStructure = {
         inputPlaceholder: '输入消息...',
         inactiveArchived: '此会话处于非活动状态。',
         resumeFromTerminal: '要从终端恢复它：',
+        newChat: '新对话',
+        statusBarContext: '上下文',
+        statusBarPathTitle: '工作目录',
+        forkAction: '分叉会话',
+        forkSubtitle: '在相同上下文中开启新会话继续',
+        duplicateAction: '从消息处复制…',
+        duplicateSubtitle: '回到选定位置重新尝试',
+        forkFromHere: '从此处分叉',
+        duplicateSheetTitle: '选择回退点',
+        duplicateSheetSubtitle: '新会话将保留所选轮次完整内容（你的消息与智能体的回复），并丢弃其后的所有消息。',
+        duplicateSheetConfirm: '复制',
+        duplicateSheetEmpty: '此会话还没有可回退的消息。',
+        duplicateRowDisabled: '此消息不能作为回退点。',
+        forkedFromLabel: '分叉自',
+        forkedFromSubtitle: '打开分叉来源的会话',
+        forkErrorOffline: '机器离线。仅当会话所在的机器在线时才能分叉。',
+        forkErrorMissingUuid: '选定的回退点已不存在于源会话中 — 请尝试不截断地分叉。',
+        forkErrorMissingMetadata: '缺少分叉所需的会话元数据。',
+        forkErrorGeneric: '分叉会话失败。',
+        forkClaudeOnly: '目前仅支持 Claude 会话的分叉。',
     },
 
     commandPalette: {
@@ -388,6 +435,21 @@ export const zhHans: TranslationStructure = {
             scanQrCode: '扫描二维码',
             openCamera: '打开相机',
         },
+        agentGoalBar: {
+            currentGoal: '当前目标',
+            accessibilityLabel: ({ goal }: { goal: string }) => `当前目标：${goal}`,
+            clearGoal: '清除目标',
+            stopGoal: '停止目标',
+            editGoal: '编辑目标',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `上下文 ${used}/${total} 个令牌，${percent}%`,
+            limitFiveHour: '5 小时额度',
+            limitSevenDay: '7 天额度',
+            limitResets: ({ time }: { time: string }) => `${time} 重置`,
+            limitAsOf: ({ age }: { age: string }) => `数据为 ${age} 前`,
+            limitRemaining: ({ percent }: { percent: number }) => `剩余 ${percent}%`,
+        },
     },
 
     agentInput: {
@@ -421,6 +483,10 @@ export const zhHans: TranslationStructure = {
             readOnly: 'Read Only Mode',
             safeYolo: 'Safe YOLO',
             yolo: 'YOLO',
+            defaultDescription: '不受信任的命令前询问',
+            readOnlyDescription: '禁止写入',
+            safeYoloDescription: '无需确认，工作区沙盒',
+            yoloDescription: '无需确认，完全访问',
             badgeReadOnly: 'Read Only Mode',
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
@@ -466,11 +532,28 @@ export const zhHans: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: '显示已归档',
         hideArchived: '隐藏已归档',
+        newSession: '新建会话',
+    },
+
+    zen: {
+        toggle: '禅模式',
     },
 
     toolView: {
         input: '输入',
         output: '输出',
+    },
+
+    toolGroup: {
+        editedFile: 'Edited file',
+        editedFiles: ({ count }: { count: number }) => `编辑了 ${count} 个文件`,
+        readFiles: ({ count }: { count: number }) => `读取了 ${count} 个文件`,
+        ranCommands: ({ count }: { count: number }) => `执行了 ${count} 个命令`,
+        searched: ({ count }: { count: number }) => `搜索了 ${count} 次`,
+        fetchedUrls: ({ count }: { count: number }) => `获取了 ${count} 个 URL`,
+        ranTasks: ({ count }: { count: number }) => `执行了 ${count} 个任务`,
+        usedTools: ({ count }: { count: number }) => `使用了 ${count} 个工具`,
+        workedFor: ({ duration }: { duration: string }) => `Worked ${duration}`,
     },
 
     tools: {
@@ -565,6 +648,31 @@ export const zhHans: TranslationStructure = {
         noChangesTitle: '没有更改',
         noChangesSubtitle: '工作区是干净的',
         deleted: '已删除',
+        changedFiles: ({ count }: { count: number }) => `${count} 个已更改的文件`,
+        allFiles: '所有文件',
+        addPanel: '添加面板',
+        closePanel: '关闭面板',
+        editFile: '编辑',
+        saveFile: '保存',
+        failedToRead: '读取文件失败',
+        failedToSave: '保存文件失败',
+        fileConflict: '文件冲突',
+        fileConflictDescription: '编辑期间文件已在设备上被修改。重新加载以查看最新版本。',
+        reload: '重新加载',
+        overwrite: '覆盖',
+    },
+    sideChat: {
+        panelTitle: '侧边聊天',
+        emptyTitle: '开始侧边聊天',
+        emptySubtitle: '在一旁向智能体提问。它会继承此聊天的上下文，但保持独立——这里的任何操作都不会影响主对话。',
+        startButton: '开始侧边聊天',
+        creating: '正在开始侧边聊天…',
+        unavailable: '此会话暂时无法开始侧边聊天——请等待智能体上线。',
+        composerPlaceholder: '给侧边聊天发消息…',
+        expand: '全屏打开',
+        tabLabel: ({ index }: { index: number }) => `侧边聊天 ${index}`,
+        newChat: '新建侧边聊天',
+        close: '关闭侧边聊天',
     },
 
     settingsVoice: {
@@ -787,6 +895,7 @@ export const zhHans: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `已切换到 ${mode} 模式`,
         unknownEvent: '未知事件',
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
+        sentAsGoal: 'Sent as goal',
         unknownTime: '未知时间',
     },
 
@@ -916,6 +1025,21 @@ export const zhHans: TranslationStructure = {
         usageOverTime: '使用趋势',
         byModel: '按模型',
         noData: '暂无使用数据',
+    },
+
+    imageUpload: {
+        permissionTitle: '访问照片库',
+        permissionMessage: '允许访问您的照片库以在消息中附加图片。',
+        limitTitle: '已达到图片限制',
+        limitMessage: ({ max }: { max: number }) => `每条消息最多可附加 ${max} 张图片。`,
+        fileTooLargeTitle: '文件过大',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}"超过了 ${maxMb}MB 的限制，未能添加。`,
+        uploadFailedTitle: '上传失败',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? '一张图片上传失败，未发送。'
+            : `${count} 张图片上传失败，未发送。`,
+        notSupportedTitle: '不支持图片',
+        notSupportedMessage: '此代理不支持图片附件。图片未发送。',
     },
 
     feed: {

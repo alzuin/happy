@@ -1,230 +1,311 @@
 import * as React from 'react';
-import { View, Text, StyleSheet, Platform, Pressable } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Animated, View, Text, Platform, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
-import { Avatar } from '@/components/Avatar';
-import { SessionActionsNativeMenu } from '@/components/SessionActionsNativeMenu';
-import { SessionActionsAnchor } from '@/components/SessionActionsPopover';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Typography } from '@/constants/Typography';
-import { Session } from '@/sync/storageTypes';
-import { useHeaderHeight } from '@/utils/responsive';
+import { isRunningOnMac } from '@/utils/platform';
+import { useHeaderHeight, useIsTablet } from '@/utils/responsive';
 import { layout } from '@/components/layout';
-import { useUnistyles } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { MobileGlassSurface } from './MobileGlass';
+import { BubblePressable } from './BubblePressable';
+import {
+    MOBILE_GLASS_CONTROL_RADIUS,
+    MOBILE_GLASS_CONTROL_SIZE,
+    MOBILE_GLASS_HEADER_HEIGHT,
+} from './navigation/headerMetrics';
+import {
+    MobileHeaderScrim,
+    MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY,
+    MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY,
+} from './navigation/MobileHeaderScrim';
 
 interface ChatHeaderViewProps {
     title: string;
-    subtitle?: string;
+    /** Project folder name (last path segment) */
+    folderName?: string;
+    /** Optional client/provider/model identity shown below the session title. */
+    identityLine?: string;
+    /** Extra path segment appended to the title with a separator (used for the file-view overlay). */
+    extraPathSegment?: string;
+    /** Optional content rendered at the right edge of the header (used by file-view / diff overlays). */
+    rightSlot?: React.ReactNode;
+    onTitlePress?: () => void;
     onBackPress?: () => void;
-    onAvatarPress?: () => void;
-    avatarId?: string;
     backgroundColor?: string;
     tintColor?: string;
     isConnected?: boolean;
-    flavor?: string | null;
-    onAvatarMenuRequest?: (anchor: SessionActionsAnchor) => void;
-    avatarMenuExpanded?: boolean;
-    avatarMenuSession?: Session | null;
-    onAfterAvatarArchive?: () => void;
-    onAfterAvatarDelete?: () => void;
-    onSidebarTogglePress?: () => void;
-    sidebarCollapsed?: boolean;
+    backdropVisible?: boolean;
 }
 
+// The title belongs to the header scrim, not its own glass capsule. Keep a
+// dense native blur at rest and let it feather past the controls into content.
 export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     title,
-    subtitle,
+    folderName,
+    identityLine,
+    extraPathSegment,
+    rightSlot,
+    onTitlePress,
     onBackPress,
-    onAvatarPress,
-    avatarId,
     isConnected = true,
-    flavor,
-    onAvatarMenuRequest,
-    avatarMenuExpanded = false,
-    avatarMenuSession,
-    onAfterAvatarArchive,
-    onAfterAvatarDelete,
-    onSidebarTogglePress,
-    sidebarCollapsed,
+    backdropVisible = false,
 }) => {
     const { theme } = useUnistyles();
-    const navigation = useNavigation();
     const insets = useSafeAreaInsets();
     const headerHeight = useHeaderHeight();
-    const avatarAnchorRef = React.useRef<View | null>(null);
-    const suppressAvatarPressUntilRef = React.useRef(0);
+    const isTablet = useIsTablet();
+    const showBackButton = !isTablet && !!onBackPress;
+    const hasExtra = !!extraPathSegment;
+    const glassEnabled = !isTablet && Platform.OS !== 'web' && !isRunningOnMac();
+    const contentHeight = glassEnabled ? Math.max(headerHeight, MOBILE_GLASS_HEADER_HEIGHT) : headerHeight;
+    const showFolderSubtitle = !!folderName && folderName !== title;
+    const folderNameColor = glassEnabled
+        ? theme.dark ? 'rgba(255, 255, 255, 0.78)' : 'rgba(24, 23, 28, 0.72)'
+        : theme.colors.textSecondary;
+    const backdropOpacity = React.useRef(new Animated.Value(
+        backdropVisible ? MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY : MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY,
+    )).current;
+    const [backdropMounted, setBackdropMounted] = React.useState(glassEnabled);
 
-    const handleBackPress = () => {
-        if (onBackPress) {
-            onBackPress();
-        } else {
-            navigation.goBack();
-        }
-    };
-
-    const requestAvatarMenuFromTrigger = React.useCallback(() => {
-        if (!onAvatarMenuRequest || !avatarAnchorRef.current) {
+    React.useEffect(() => {
+        if (!glassEnabled) {
+            setBackdropMounted(false);
             return;
         }
 
-        suppressAvatarPressUntilRef.current = Date.now() + 750;
-        avatarAnchorRef.current.measureInWindow((x, y, width, height) => {
-            onAvatarMenuRequest({
-                type: 'rect',
-                x,
-                y,
-                width,
-                height,
-            });
-        });
-    }, [onAvatarMenuRequest]);
+        setBackdropMounted(true);
+        Animated.timing(backdropOpacity, {
+            toValue: backdropVisible ? MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY : MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY,
+            duration: 200,
+            useNativeDriver: true,
+        }).start();
+    }, [backdropOpacity, backdropVisible, glassEnabled]);
 
-    const handleAvatarPress = React.useCallback(() => {
-        if (Date.now() < suppressAvatarPressUntilRef.current) {
-            return;
-        }
-        onAvatarPress?.();
-    }, [onAvatarPress]);
+    if (Platform.OS === 'web') {
+        return (
+            <View style={[styles.container, { paddingTop: insets.top, backgroundColor: theme.colors.header.background }]}>
+                <View style={styles.contentWrapper}>
+                    <View style={[styles.webContent, { height: headerHeight }]}>
+                        {showBackButton && (
+                            <Pressable onPress={onBackPress} hitSlop={15} style={styles.webBackButton}>
+                                <Ionicons
+                                    name="arrow-back"
+                                    size={24}
+                                    color={theme.colors.header.tint}
+                                />
+                            </Pressable>
+                        )}
+                        <Pressable
+                            style={styles.titleContainer}
+                            onPress={onTitlePress}
+                            disabled={!onTitlePress}
+                        >
+                            {folderName ? (
+                                <View style={styles.webTitleRow}>
+                                    <Text
+                                        numberOfLines={1}
+                                        style={[styles.webFolderName, { color: theme.colors.textSecondary, ...Typography.default() }]}
+                                    >
+                                        {folderName}
+                                    </Text>
+                                    {title && title !== folderName && (
+                                        <>
+                                            <Text style={[styles.webSeparator, { color: theme.colors.textSecondary, ...Typography.default() }]}>/</Text>
+                                            <Text
+                                                numberOfLines={1}
+                                                ellipsizeMode="tail"
+                                                style={[
+                                                    styles.webTitle,
+                                                    hasExtra && styles.webTitleWithExtra,
+                                                    { color: theme.colors.header.tint, ...Typography.default() },
+                                                ]}
+                                            >
+                                                {title}
+                                            </Text>
+                                        </>
+                                    )}
+                                    {hasExtra && (
+                                        <>
+                                            <Text style={[styles.webSeparator, { color: theme.colors.textSecondary, ...Typography.default() }]}>/</Text>
+                                            <Text
+                                                numberOfLines={1}
+                                                ellipsizeMode="middle"
+                                                style={[styles.webExtraPath, { color: theme.colors.header.tint, ...Typography.mono() }]}
+                                            >
+                                                {extraPathSegment}
+                                            </Text>
+                                        </>
+                                    )}
+                                </View>
+                            ) : (
+                                <Text
+                                    numberOfLines={1}
+                                    ellipsizeMode="tail"
+                                    style={[styles.webTitle, { color: theme.colors.header.tint, ...Typography.default() }]}
+                                >
+                                    {title}
+                                </Text>
+                            )}
+                            {identityLine ? (
+                                <Text
+                                    numberOfLines={1}
+                                    ellipsizeMode="tail"
+                                    style={[styles.identityLine, { color: theme.colors.textSecondary, ...Typography.default() }]}
+                                >
+                                    {identityLine}
+                                </Text>
+                            ) : null}
+                        </Pressable>
+                        {rightSlot ? <View style={styles.webRightSlot}>{rightSlot}</View> : null}
+                    </View>
+                </View>
+            </View>
+        );
+    }
 
-    const handleAvatarContextMenu = React.useCallback((event: any) => {
-        if (!onAvatarMenuRequest) {
-            return;
-        }
-
-        event.preventDefault?.();
-        event.stopPropagation?.();
-        suppressAvatarPressUntilRef.current = Date.now() + 750;
-        onAvatarMenuRequest({
-            type: 'point',
-            x: event.nativeEvent.clientX ?? event.nativeEvent.pageX ?? 0,
-            y: event.nativeEvent.clientY ?? event.nativeEvent.pageY ?? 0,
-        });
-    }, [onAvatarMenuRequest]);
-
-    const handleAvatarKeyDown = React.useCallback((event: any) => {
-        const key = event.nativeEvent?.key;
-        const shiftKey = !!event.nativeEvent?.shiftKey;
-        if (key === 'ContextMenu' || (shiftKey && key === 'F10')) {
-            event.preventDefault?.();
-            requestAvatarMenuFromTrigger();
-        }
-    }, [requestAvatarMenuFromTrigger]);
-
-    const webAvatarMenuProps = Platform.OS === 'web' && onAvatarMenuRequest ? {
-        'aria-expanded': avatarMenuExpanded,
-        'aria-haspopup': 'menu',
-        onContextMenu: handleAvatarContextMenu,
-        onKeyDown: handleAvatarKeyDown,
-    } as any : {};
-
-    return (
-        <View style={[styles.container, { paddingTop: insets.top, backgroundColor: theme.colors.header.background }]}>
-            <View style={styles.contentWrapper}>
-                <View style={[styles.content, { height: headerHeight }]}>
-                    <Pressable onPress={handleBackPress} style={styles.backButton} hitSlop={15}>
-                        <Ionicons
-                            name={Platform.OS === 'ios' ? 'chevron-back' : 'arrow-back'}
-                            size={Platform.select({ ios: 28, default: 24 })}
-                            color={theme.colors.header.tint}
-                        />
-                    </Pressable>
-
-                    <View style={styles.titleContainer}>
+    const nativeTitle = (
+        <BubblePressable
+            style={[styles.titleContainer, glassEnabled && styles.mobileTitleContainer]}
+            onPress={onTitlePress}
+            disabled={!onTitlePress}
+            bubbleScale={1.012}
+        >
+            <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                style={[
+                    styles.title,
+                    glassEnabled && styles.mobileTitleText,
+                    { color: theme.colors.header.tint, ...Typography.default('semiBold') },
+                ]}
+            >
+                {title || folderName}
+            </Text>
+            {(showFolderSubtitle || hasExtra) && (
+                <View style={[styles.subtitleRow, glassEnabled && styles.mobileSubtitleRow]}>
+                    {showFolderSubtitle && (
                         <Text
                             numberOfLines={1}
                             ellipsizeMode="tail"
-                            style={[
-                                styles.title,
-                                {
-                                    color: theme.colors.header.tint,
-                                    ...Typography.default('semiBold')
-                                }
-                            ]}
+                            style={[styles.folderName, { color: folderNameColor, ...Typography.default() }]}
                         >
-                            {title}
+                            {folderName}
                         </Text>
-                        {subtitle && (
-                            <Text
-                                numberOfLines={1}
-                                ellipsizeMode="tail"
-                                style={[
-                                    styles.subtitle,
-                                    {
-                                        color: theme.colors.header.tint,
-                                        opacity: 0.7,
-                                        ...Typography.default()
-                                    }
-                                ]}
-                            >
-                                {subtitle}
-                            </Text>
-                        )}
-                    </View>
-
-                    {avatarId && onAvatarPress && (
-                        <View collapsable={false} ref={avatarAnchorRef} style={styles.avatarButtonSlot}>
-                            {avatarMenuSession ? (
-                                <SessionActionsNativeMenu
-                                    onAfterArchive={onAfterAvatarArchive}
-                                    onAfterDelete={onAfterAvatarDelete}
-                                    session={avatarMenuSession}
-                                >
-                                    <Pressable
-                                        hitSlop={15}
-                                        onPress={handleAvatarPress}
-                                        style={styles.avatarButton}
-                                        {...webAvatarMenuProps}
-                                    >
-                                        <Avatar
-                                            id={avatarId}
-                                            size={32}
-                                            monochrome={!isConnected}
-                                            flavor={flavor}
-                                        />
-                                    </Pressable>
-                                </SessionActionsNativeMenu>
-                            ) : (
-                                <Pressable
-                                    hitSlop={15}
-                                    onPress={handleAvatarPress}
-                                    style={styles.avatarButton}
-                                    {...webAvatarMenuProps}
-                                >
-                                    <Avatar
-                                        id={avatarId}
-                                        size={32}
-                                        monochrome={!isConnected}
-                                        flavor={flavor}
-                                    />
-                                </Pressable>
-                            )}
-                        </View>
                     )}
-
-                    {onSidebarTogglePress && (
-                        <Pressable
-                            onPress={onSidebarTogglePress}
-                            hitSlop={10}
-                            style={styles.sidebarToggleButton}
-                            accessibilityLabel={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                    {showFolderSubtitle && hasExtra && (
+                        <Text style={[styles.separator, { color: theme.colors.textSecondary, ...Typography.default() }]}>•</Text>
+                    )}
+                    {hasExtra && (
+                        <Text
+                            numberOfLines={1}
+                            ellipsizeMode="middle"
+                            style={[styles.extraPath, { color: theme.colors.textSecondary, ...Typography.mono() }]}
                         >
-                            <Ionicons
-                                name={sidebarCollapsed ? 'albums-outline' : 'albums'}
-                                size={22}
-                                color={theme.colors.header.tint}
-                            />
+                            {extraPathSegment}
+                        </Text>
+                    )}
+                </View>
+            )}
+            {identityLine ? (
+                <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={[
+                        styles.identityLine,
+                        glassEnabled && styles.mobileIdentityLine,
+                        { color: theme.colors.textSecondary, ...Typography.default() },
+                    ]}
+                >
+                    {identityLine}
+                </Text>
+            ) : null}
+        </BubblePressable>
+    );
+
+    return (
+        <View
+            style={[
+                styles.container,
+                {
+                    paddingTop: insets.top,
+                    backgroundColor: glassEnabled ? 'transparent' : theme.colors.header.background,
+                },
+            ]}
+        >
+            {glassEnabled && backdropMounted && (
+                <Animated.View
+                    pointerEvents="none"
+                    style={[styles.headerBackdrop, { opacity: backdropOpacity }]}
+                >
+                    <MobileHeaderScrim variant="strong" />
+                </Animated.View>
+            )}
+            <View style={styles.contentWrapper}>
+                <View style={[styles.content, { height: contentHeight }]}>
+                    {showBackButton && (
+                        <Pressable
+                            onPress={onBackPress}
+                            hitSlop={10}
+                            style={({ pressed }) => [styles.backButton, pressed && styles.controlPressed]}
+                        >
+                            <MobileGlassSurface
+                                enabled={glassEnabled}
+                                interactive
+                                material="static"
+                                intensity={76}
+                                style={styles.backButtonGlass}
+                            >
+                                <Ionicons
+                                    name={Platform.OS === 'ios' ? 'chevron-back' : 'arrow-back'}
+                                    size={24}
+                                    color={theme.colors.header.tint}
+                                />
+                            </MobileGlassSurface>
                         </Pressable>
                     )}
+                    {glassEnabled ? (
+                        <>
+                            <View pointerEvents="none" style={styles.mobileTitleSpacer} />
+                            <View pointerEvents="box-none" style={styles.mobileTitleOverlay}>
+                                {nativeTitle}
+                            </View>
+                        </>
+                    ) : (
+                        <View style={styles.titlePillContainer}>
+                            {nativeTitle}
+                        </View>
+                    )}
+                    {rightSlot ? (
+                        <MobileGlassSurface
+                            enabled={glassEnabled}
+                            nativeEffect
+                            material="static"
+                            intensity={76}
+                            style={styles.rightControlGlass}
+                        >
+                            <View style={styles.rightSlot}>
+                                {rightSlot}
+                            </View>
+                        </MobileGlassSurface>
+                    ) : null}
                 </View>
             </View>
         </View>
     );
 };
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create((theme) => ({
     container: {
         position: 'relative',
         zIndex: 100,
+    },
+    headerBackdrop: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: -36,
+        left: 0,
     },
     contentWrapper: {
         width: '100%',
@@ -233,47 +314,194 @@ const styles = StyleSheet.create({
     content: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: Platform.OS === 'ios' ? 8 : 16,
+        gap: 8,
+        paddingHorizontal: 12,
         width: '100%',
         maxWidth: layout.headerMaxWidth,
     },
-    backButton: {
-        marginRight: 8,
+    webContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        width: '100%',
+        maxWidth: layout.headerMaxWidth,
     },
     titleContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'flex-start',
+        minWidth: 0,
     },
-    title: {
-        fontSize: Platform.select({
-            ios: 15,
-            android: 15,
-            default: 16
-        }),
-        fontWeight: '600',
-        marginBottom: 1,
+    titlePillContainer: {
+        flex: 1,
+        alignSelf: 'stretch',
+        minWidth: 0,
+    },
+    mobileTitleSpacer: {
+        flex: 1,
+        minWidth: 0,
+    },
+    mobileTitleOverlay: {
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        left: MOBILE_GLASS_CONTROL_SIZE + 8,
+        right: MOBILE_GLASS_CONTROL_SIZE + 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    mobileTitleContainer: {
+        width: '100%',
+        flex: 0,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 8,
+    },
+    mobileTitleText: {
+        textAlign: 'center',
+        textShadowColor: theme.dark ? 'rgba(0, 0, 0, 0.30)' : 'rgba(255, 255, 255, 0.30)',
+        textShadowOffset: { width: 0, height: 1 },
+        textShadowRadius: 2,
+    },
+    mobileSubtitleRow: {
+        justifyContent: 'center',
+    },
+    mobileIdentityLine: {
+        textAlign: 'center',
+    },
+    webTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
         width: '100%',
     },
-    subtitle: {
-        fontSize: 12,
-        fontWeight: '400',
+    identityLine: {
+        fontSize: 11,
         lineHeight: 14,
+        maxWidth: '100%',
     },
-    avatarButtonSlot: {
-        overflow: 'visible',
+    webFolderName: {
+        fontSize: 14,
+        flexShrink: 0,
     },
-    avatarButton: {
-        width: 44,
-        height: 44,
+    webSeparator: {
+        fontSize: 14,
+        flexShrink: 0,
+    },
+    webTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        flexShrink: 1,
+    },
+    webTitleWithExtra: {
+        flexShrink: 0.5,
+    },
+    webExtraPath: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 13,
+        flexShrink: 1,
+    },
+    webRightSlot: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginLeft: 12,
+        flexShrink: 0,
+    },
+    webBackButton: {
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+    },
+    subtitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        width: '100%',
+    },
+    folderName: {
+        fontSize: 12,
+        lineHeight: 16,
+        flexShrink: 1,
+    },
+    separator: {
+        fontSize: 12,
+        lineHeight: 16,
+        flexShrink: 0,
+    },
+    title: {
+        fontSize: 16,
+        lineHeight: 20,
+        fontWeight: '600',
+        width: '100%',
+    },
+    extraPath: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 11,
+        lineHeight: 16,
+        flexShrink: 1,
+    },
+    rightControlGlass: {
+        minWidth: Platform.select({ web: 0, default: MOBILE_GLASS_CONTROL_SIZE }),
+        minHeight: Platform.select({ web: 0, default: MOBILE_GLASS_CONTROL_SIZE }),
+        borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
         alignItems: 'center',
         justifyContent: 'center',
+        overflow: 'hidden',
+        backgroundColor: Platform.select({
+            web: 'transparent',
+            ios: 'transparent',
+            android: theme.colors.glass.backgroundStrong,
+            default: 'transparent',
+        }),
+        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+        borderColor: theme.colors.glass.border,
+        shadowColor: theme.colors.glass.shadow,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: Platform.select({ web: 0, default: 1 }),
+        shadowRadius: 18,
+        elevation: Platform.select({ android: 8, default: 0 }),
+        zIndex: 1,
     },
-    sidebarToggleButton: {
-        width: 36,
-        height: 36,
+    rightSlot: {
+        minHeight: Platform.select({ web: 0, default: MOBILE_GLASS_CONTROL_SIZE }),
+        flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: Platform.select({ ios: -8, default: -8 }),
+        gap: 6,
+        paddingHorizontal: Platform.select({ web: 0, default: 8 }),
+        flexShrink: 0,
     },
-});
+    backButton: {
+        width: Platform.select({ web: 36, default: MOBILE_GLASS_CONTROL_SIZE }),
+        height: Platform.select({ web: 36, default: MOBILE_GLASS_CONTROL_SIZE }),
+        borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
+        zIndex: 1,
+    },
+    backButtonGlass: {
+        width: '100%',
+        height: '100%',
+        borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        backgroundColor: Platform.select({
+            web: 'transparent',
+            ios: 'transparent',
+            android: theme.colors.glass.backgroundStrong,
+            default: 'transparent',
+        }),
+        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+        borderColor: theme.colors.glass.border,
+        shadowColor: theme.colors.glass.shadow,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: Platform.select({ web: 0, default: 1 }),
+        shadowRadius: 18,
+        elevation: Platform.select({ android: 8, default: 0 }),
+    },
+    controlPressed: {
+        opacity: 0.68,
+        transform: [{ scale: 0.97 }],
+    },
+}));

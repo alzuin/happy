@@ -83,12 +83,14 @@ export const ca: TranslationStructure = {
         permissionRequired: 'permís requerit',
         activeNow: 'Actiu ara',
         unknown: 'desconegut',
+        unread: 'nous resultats',
     },
 
     time: {
         justNow: 'ara mateix',
         minutesAgo: ({ count }: { count: number }) => `fa ${count} minut${count !== 1 ? 's' : ''}`,
         hoursAgo: ({ count }: { count: number }) => `fa ${count} hora${count !== 1 ? 'es' : ''}`,
+        daysAgo: ({ count }: { count: number }) => `fa ${count} dia${count !== 1 ? 's' : ''}`,
     },
 
     connect: {
@@ -159,6 +161,27 @@ export const ca: TranslationStructure = {
             light: 'Usa sempre el tema clar',
             dark: 'Usa sempre el tema fosc',
         },
+        chat: 'Xat',
+        chatDescription: 'Personalitza l\'aspecte dels missatges del xat',
+        sessionStatusBar: 'Informació d\'estat de la sessió',
+        sessionStatusBarDescription: 'Tria on es mostren la branca, el model, l\'esforç i el context',
+        sessionStatusDisplayOptions: {
+            hidden: 'Ocult',
+            above: 'Sobre el compositor',
+            below: 'Sota el compositor',
+        },
+        usageLimitShowRemaining: 'Mostra la quota restant',
+        usageLimitShowRemainingDescription: 'Els indicadors de límit compten enrere en lloc d\'endavant',
+        userMessageBubbleColor: 'Color dels teus missatges',
+        userMessageBubbleColorDescription: 'Fes que els teus missatges siguin més fàcils de trobar en xats llargs',
+        userMessageBubbleColorOptions: {
+            blue: 'Blau',
+            green: 'Verd',
+            purple: 'Porpra',
+            rose: 'Rosa',
+            sand: 'Sorra',
+            gray: 'Gris',
+        },
         display: 'Pantalla',
         displayDescription: 'Controla la disposició i l\'espaiat',
         inlineToolCalls: 'Crides d\'eines en línia',
@@ -209,11 +232,15 @@ export const ca: TranslationStructure = {
         markdownCopyV2Subtitle: 'Pulsació llarga obre modal de còpia',
         hideInactiveSessions: 'Amaga les sessions inactives',
         hideInactiveSessionsSubtitle: 'Mostra només els xats actius a la llista',
+        groupToolCalls: 'Agrupa les crides a eines',
+        groupToolCallsSubtitle: 'Replega les crides consecutives a eines en un sol contenidor',
         privacy: 'Privadesa',
         privacyDescription: 'Desactiva completament tota l\'analítica i telemetria. No s\'enviaran dades a PostHog ni a cap altre servei de seguiment.',
         disableAnalytics: 'Desactivar analítica',
         analyticsDisabled: 'Tot el seguiment i telemetria desactivats',
         analyticsEnabled: 'Analítica anònima d\'ús activa',
+        imageUpload: 'Pujada d\'imatges',
+        imageUploadSubtitle: 'Adjunta imatges als missatges perquè els agents compatibles les analitzin',
     },
 
     errors: {
@@ -286,6 +313,26 @@ export const ca: TranslationStructure = {
         inputPlaceholder: 'Escriu un missatge...',
         inactiveArchived: 'Aquesta sessió està inactiva.',
         resumeFromTerminal: 'Per reprendre-la des del terminal:',
+        newChat: 'Nou xat',
+        statusBarContext: 'Context',
+        statusBarPathTitle: 'Directori de treball',
+        forkAction: 'Bifurca la sessió',
+        forkSubtitle: 'Continua en una nova sessió amb el mateix context',
+        duplicateAction: 'Duplica des d\'un missatge…',
+        duplicateSubtitle: 'Torna a un punt escollit i prova de nou',
+        forkFromHere: 'Bifurca des d\'aquí',
+        duplicateSheetTitle: 'Tria un punt de retrocés',
+        duplicateSheetSubtitle: 'La nova sessió conservarà el torn escollit complet (el teu missatge i la resposta de l\'agent) i descartarà els missatges següents.',
+        duplicateSheetConfirm: 'Duplica',
+        duplicateSheetEmpty: 'Encara no hi ha missatges per retrocedir en aquesta sessió.',
+        duplicateRowDisabled: 'Aquest missatge no es pot usar com a punt de retrocés.',
+        forkedFromLabel: 'Bifurcat de',
+        forkedFromSubtitle: 'Obre la sessió de la qual prové la bifurcació',
+        forkErrorOffline: 'La màquina està fora de línia. La bifurcació només està disponible mentre la màquina de la sessió estigui en línia.',
+        forkErrorMissingUuid: 'El punt de retrocés escollit ja no existeix a la sessió origen — prova a bifurcar sense truncar.',
+        forkErrorMissingMetadata: 'Falten metadades de la sessió necessàries per bifurcar.',
+        forkErrorGeneric: 'No s\'ha pogut bifurcar la sessió.',
+        forkClaudeOnly: 'La bifurcació només està disponible per a sessions de Claude.',
     },
 
     commandPalette: {
@@ -387,6 +434,21 @@ export const ca: TranslationStructure = {
             scanQrCode: 'Escaneja el codi QR',
             openCamera: 'Obre la càmera',
         },
+        agentGoalBar: {
+            currentGoal: 'Objectiu actual',
+            accessibilityLabel: ({ goal }: { goal: string }) => `Objectiu actual: ${goal}`,
+            clearGoal: 'Esborra objectiu',
+            stopGoal: 'Atura objectiu',
+            editGoal: 'Edita objectiu',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Context ${used} de ${total} tokens, ${percent}%`,
+            limitFiveHour: 'Límit de 5 hores',
+            limitSevenDay: 'Límit de 7 dies',
+            limitResets: ({ time }: { time: string }) => `es restableix ${time}`,
+            limitAsOf: ({ age }: { age: string }) => `fa ${age}`,
+            limitRemaining: ({ percent }: { percent: number }) => `${percent}% restant`,
+        },
     },
 
     agentInput: {
@@ -420,6 +482,10 @@ export const ca: TranslationStructure = {
             readOnly: 'Read Only Mode',
             safeYolo: 'Safe YOLO',
             yolo: 'YOLO',
+            defaultDescription: "pregunta abans d'ordres no fiables",
+            readOnlyDescription: 'sense escriptura',
+            safeYoloDescription: "sense preguntes, sandbox de l'espai de treball",
+            yoloDescription: 'sense preguntes, accés complet',
             badgeReadOnly: 'Read Only Mode',
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
@@ -465,11 +531,28 @@ export const ca: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: 'Mostra arxivades',
         hideArchived: 'Amaga arxivades',
+        newSession: 'Nova sessió',
+    },
+
+    zen: {
+        toggle: 'Mode zen',
     },
 
     toolView: {
         input: 'Entrada',
         output: 'Sortida',
+    },
+
+    toolGroup: {
+        editedFile: 'Edited file',
+        editedFiles: ({ count }: { count: number }) => count === 1 ? 'S\'ha editat 1 fitxer' : `S'han editat ${count} fitxers`,
+        readFiles: ({ count }: { count: number }) => count === 1 ? 'S\'ha llegit 1 fitxer' : `S'han llegit ${count} fitxers`,
+        ranCommands: ({ count }: { count: number }) => count === 1 ? 'S\'ha executat 1 comanda' : `S'han executat ${count} comandes`,
+        searched: ({ count }: { count: number }) => count === 1 ? 'S\'ha cercat 1 vegada' : `S'ha cercat ${count} vegades`,
+        fetchedUrls: ({ count }: { count: number }) => count === 1 ? 'S\'ha obtingut 1 URL' : `S'han obtingut ${count} URLs`,
+        ranTasks: ({ count }: { count: number }) => count === 1 ? 'S\'ha executat 1 tasca' : `S'han executat ${count} tasques`,
+        usedTools: ({ count }: { count: number }) => count === 1 ? 'S\'ha usat 1 eina' : `S'han usat ${count} eines`,
+        workedFor: ({ duration }: { duration: string }) => `Worked ${duration}`,
     },
 
     tools: {
@@ -564,6 +647,31 @@ export const ca: TranslationStructure = {
         noChangesTitle: 'Sense canvis',
         noChangesSubtitle: 'L\'arbre de treball està net',
         deleted: 'Eliminat',
+        changedFiles: ({ count }: { count: number }) => `${count} ${count === 1 ? 'fitxer modificat' : 'fitxers modificats'}`,
+        allFiles: 'Tots els fitxers',
+        addPanel: 'Afegeix un panell',
+        closePanel: 'Tanca el panell',
+        editFile: 'Editar',
+        saveFile: 'Desar',
+        failedToRead: 'No s\'ha pogut llegir el fitxer',
+        failedToSave: 'No s\'ha pogut desar el fitxer',
+        fileConflict: 'Conflicte de fitxer',
+        fileConflictDescription: 'Aquest fitxer s\'ha modificat al dispositiu mentre l\'editaves. Recarrega per veure la darrera versió.',
+        reload: 'Recarregar',
+        overwrite: 'Sobreescriure',
+    },
+    sideChat: {
+        panelTitle: 'Xat lateral',
+        emptyTitle: 'Inicia un xat lateral',
+        emptySubtitle: 'Pregunta alguna cosa a l’agent a part. Hereta el context d’aquest xat però es manté aïllat — res d’aquí no afecta la conversa principal.',
+        startButton: 'Inicia el xat lateral',
+        creating: 'Iniciant el xat lateral…',
+        unavailable: 'Aquesta sessió encara no pot iniciar un xat lateral — espera que l’agent estigui en línia.',
+        composerPlaceholder: 'Missatge al xat lateral…',
+        expand: 'Obre a pantalla completa',
+        tabLabel: ({ index }: { index: number }) => `Xat lateral ${index}`,
+        newChat: 'Nou xat lateral',
+        close: 'Tanca el xat lateral',
     },
 
     settingsVoice: {
@@ -786,6 +894,7 @@ export const ca: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `S'ha canviat al mode ${mode}`,
         unknownEvent: 'Esdeveniment desconegut',
         usageLimitUntil: ({ time }: { time: string }) => `Límit d'ús assolit fins a ${time}`,
+        sentAsGoal: 'Sent as goal',
         unknownTime: 'temps desconegut',
     },
 
@@ -915,6 +1024,21 @@ export const ca: TranslationStructure = {
         usageOverTime: 'Ús al llarg del temps',
         byModel: 'Per model',
         noData: "No hi ha dades d'ús disponibles",
+    },
+
+    imageUpload: {
+        permissionTitle: 'Accés a la biblioteca de fotos',
+        permissionMessage: "Permet l'accés a la teva biblioteca de fotos per adjuntar imatges als missatges.",
+        limitTitle: "Límit d'imatges assolit",
+        limitMessage: ({ max }: { max: number }) => `Pots adjuntar fins a ${max} imatges per missatge.`,
+        fileTooLargeTitle: 'Fitxer massa gran',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}" supera el límit de ${maxMb}MB i no s'ha afegit.`,
+        uploadFailedTitle: 'Error en la càrrega',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? 'No s\'ha pogut pujar una imatge i no s\'ha enviat.'
+            : `No s'han pogut pujar ${count} imatges i no s'han enviat.`,
+        notSupportedTitle: 'Imatges no compatibles',
+        notSupportedMessage: 'Aquest agent no admet fitxers adjunts d\'imatge. Les imatges no s\'han enviat.',
     },
 
     feed: {

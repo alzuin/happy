@@ -230,6 +230,40 @@ export const UserMessageSchema = z.object({
 
 export type UserMessage = z.infer<typeof UserMessageSchema>
 
+/**
+ * File event message — sent by the app as a session envelope before the text message.
+ * Contains a ref pointing to the encrypted blob on the server.
+ */
+export const FileEventMessageSchema = z.object({
+  role: z.literal('session'),
+  content: z.object({
+    type: z.literal('session'),
+    data: z.object({
+      id: z.string(),
+      time: z.number(),
+      role: z.literal('user'),
+      ev: z.object({
+        t: z.literal('file'),
+        ref: z.string(),
+        name: z.string(),
+        size: z.number(),
+        mimeType: z.string().optional(),
+        image: z.object({
+          width: z.number(),
+          height: z.number(),
+          // Optional — native iOS picker has no Canvas to compute thumbhash.
+          // App-side schema relaxed this in the same commit; keeping CLI in
+          // sync so the file event isn't silently rejected by Zod and the
+          // attachment never reaches Claude.
+          thumbhash: z.string().optional(),
+        }).optional(),
+      }),
+    }),
+  }),
+})
+
+export type FileEventMessage = z.infer<typeof FileEventMessageSchema>
+
 export const AgentMessageSchema = z.object({
   role: z.literal('agent'),
   content: z.object({
@@ -266,6 +300,7 @@ export type Metadata = {
     updatedAt: number
   },
   machineId?: string,
+  gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID
   tools?: string[],
@@ -287,15 +322,85 @@ export type Metadata = {
   flavor?: string
   sandbox?: SandboxConfig | null
   dangerouslySkipPermissions?: boolean | null
+  /** Lineage for sessions created via the fork / duplicate flow. */
+  parentSessionId?: string
+  forkedFromMessageId?: string
+  /**
+   * Marks a session as a hidden "side chat" forked from `parentSessionId`.
+   * Side chats never appear in the top-level session list; they render only
+   * inside the parent session's sidebar panel.
+   */
+  isSideChat?: boolean
 };
+
+export type UsageLimitWindowStatus = 'allowed' | 'allowed_warning' | 'rejected'
+
+export type UsageLimitWindow = {
+  /** Stable machine key, e.g. 'five_hour' / 'seven_day'. */
+  id: string,
+  label?: string,
+  status?: UsageLimitWindowStatus,
+  /** Percent of the window used, 0-100. */
+  utilization?: number | null,
+  /** Epoch milliseconds when the window resets. */
+  resetsAt?: number | null,
+}
+
+export type UsageLimits = {
+  capturedAt: number,
+  windows: UsageLimitWindow[],
+}
+
+export type AgentGoalStatus = {
+  source: 'claude' | 'codex',
+  observedAt: number,
+  sourceSessionId?: string,
+  sourceRevision?: string | number,
+} & (
+  | {
+      status: 'unavailable',
+      reason?: 'unsupported' | 'not_loaded' | 'stale' | 'malformed' | 'error' | 'unknown',
+    }
+  | {
+      status: 'inactive',
+      reason?: 'none' | 'cleared' | 'completed' | 'unknown',
+    }
+  | {
+      status: 'active',
+      sourceSessionId: string,
+      text: string,
+      capabilities?: {
+        clear?: boolean,
+        stop?: boolean,
+        edit?: boolean,
+      },
+      progress?: {
+        currentStep?: number,
+        totalSteps?: number,
+        steps?: Array<{
+          text: string,
+          status: 'pending' | 'in_progress' | 'completed',
+        }>,
+      },
+    }
+);
 
 export type AgentState = {
   controlledByUser?: boolean | null | undefined
+  /**
+   * Ephemeral plan rate-limit windows reported by the agent backend.
+   * Apps must tolerate window ids they don't recognize.
+   */
+  usageLimits?: UsageLimits
   requests?: {
     [id: string]: {
       tool: string,
       arguments: any,
-      createdAt: number
+      createdAt: number,
+      // Raw provider tool-use id when the request id is scoped (e.g. claude
+      // subagent ids are `agentID:toolUseID`); the app joins the permission
+      // card to its tool call through this.
+      toolUseId?: string
     }
   }
   completedRequests?: {
@@ -308,7 +413,9 @@ export type AgentState = {
       reason?: string,
       mode?: PermissionMode,
       decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort',
-      allowTools?: string[]
+      allowTools?: string[],
+      toolUseId?: string
     }
   }
+  agentGoalStatus?: AgentGoalStatus
 }

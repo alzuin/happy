@@ -1,4 +1,6 @@
 import * as z from 'zod';
+import { AgentDefaultOverridesSchema } from './agentDefaults';
+import { DEFAULT_USER_MESSAGE_BUBBLE_COLOR } from '../utils/userMessageBubbleColor';
 
 //
 // Settings Schema
@@ -6,6 +8,11 @@ import * as z from 'zod';
 
 // Current schema version for backward compatibility
 export const SUPPORTED_SCHEMA_VERSION = 2;
+
+// Where (and whether) the branch/model/effort/context status bar renders
+// around the composer.
+export const SESSION_STATUS_BAR_DISPLAY_MODES = ['hidden', 'above', 'below'] as const;
+export type SessionStatusBarDisplay = typeof SESSION_STATUS_BAR_DISPLAY_MODES[number];
 
 export const SettingsSchema = z.object({
     // Schema version for compatibility detection
@@ -24,10 +31,16 @@ export const SettingsSchema = z.object({
     agentInputEnterToSend: z.boolean().describe('Whether pressing Enter submits/sends in the agent input (web)'),
     avatarStyle: z.string().describe('Avatar display style'),
     showFlavorIcons: z.boolean().describe('Whether to show AI provider icons in avatars'),
+    userMessageBubbleColor: z.string().describe('User message bubble color preset'),
+    sessionStatusBarDisplay: z.enum(SESSION_STATUS_BAR_DISPLAY_MODES).describe('Whether/where to show the branch, model, effort, and context status bar'),
+    usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
 
     hideInactiveSessions: z.boolean().describe('Hide inactive sessions in the main list'),
+    sortSessionsByActivity: z.boolean().describe('Sort the session list by last activity instead of creation date'),
     expResumeSession: z.boolean().describe('Enable experimental session resume feature'),
     fileDiffsSidebar: z.boolean().describe('Show the file diffs sidebar next to the chat on desktop'),
+    groupToolCalls: z.boolean().describe('Collapse consecutive tool calls into grouped containers in chat'),
+    expImageUpload: z.boolean().describe('Enable experimental image upload in chat'),
     reviewPromptAnswered: z.boolean().describe('Whether the review prompt has been answered'),
     reviewPromptLikedApp: z.boolean().nullish().describe('Whether user liked the app when asked'),
     voiceAssistantLanguage: z.string().nullable().describe('Preferred language for voice assistant (null for auto-detect)'),
@@ -41,6 +54,7 @@ export const SettingsSchema = z.object({
     lastUsedAgent: z.string().nullable().describe('Last selected agent type for new sessions'),
     lastUsedPermissionMode: z.string().nullable().describe('Last selected permission mode for new sessions'),
     lastUsedModelMode: z.string().nullable().describe('Last selected model mode for new sessions'),
+    agentDefaultOverrides: AgentDefaultOverridesSchema.describe('User-selected agent defaults. Missing values use code defaults and are not sent as agent metadata.'),
     // Dismissed CLI warning banners (supports both per-machine and global dismissal)
     dismissedCLIWarnings: z.object({
         perMachine: z.record(z.string(), z.object({
@@ -92,10 +106,18 @@ export const settingsDefaults: Settings = {
     agentInputEnterToSend: true,
     avatarStyle: 'brutalist',
     showFlavorIcons: false,
+    userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
+    // Hidden everywhere by default — the context usage indicator is still too
+    // raw to roll out; users can opt back in from appearance settings.
+    sessionStatusBarDisplay: 'hidden',
+    usageLimitShowRemaining: false,
 
     hideInactiveSessions: false,
+    sortSessionsByActivity: false,
     expResumeSession: false,
     fileDiffsSidebar: false,
+    groupToolCalls: false,
+    expImageUpload: false,
     reviewPromptAnswered: false,
     reviewPromptLikedApp: null,
     voiceAssistantLanguage: null,
@@ -106,6 +128,7 @@ export const settingsDefaults: Settings = {
     lastUsedAgent: null,
     lastUsedPermissionMode: null,
     lastUsedModelMode: null,
+    agentDefaultOverrides: {},
     dismissedCLIWarnings: { perMachine: {}, global: {} },
 };
 Object.freeze(settingsDefaults);
@@ -160,5 +183,20 @@ export function applySettings(settings: Settings, delta: Partial<Settings>): Set
         }
     });
 
+    return result;
+}
+
+export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
+    const result: Partial<Settings> = { ...settings };
+    const compactAgentOverrides = Object.fromEntries(
+        Object.entries(settings.agentDefaultOverrides ?? {}).filter(([, value]) => (
+            value && typeof value === 'object' && Object.keys(value).length > 0
+        )),
+    ) as Settings['agentDefaultOverrides'];
+    if (Object.keys(compactAgentOverrides).length === 0) {
+        delete result.agentDefaultOverrides;
+    } else {
+        result.agentDefaultOverrides = compactAgentOverrides;
+    }
     return result;
 }

@@ -9,13 +9,14 @@ import { ItemList } from '@/components/ItemList';
 import { Typography } from '@/constants/Typography';
 import { GitFileStatus } from '@/sync/gitStatusFiles';
 import { searchFiles, FileItem } from '@/sync/suggestionFile';
-import { useSessionGitStatus, useSessionProjectGitStatus } from '@/sync/storage';
+import { useSessionGitStatus } from '@/sync/storage';
 import { useGitStatusFiles } from '@/hooks/useGitStatusFiles';
 import { useUnistyles, StyleSheet } from 'react-native-unistyles';
 import { layout } from '@/components/layout';
 import { FileIcon } from '@/components/FileIcon';
 import { Shaker, ShakeInstance } from '@/components/Shaker';
 import { usePrefetchFileContents } from '@/hooks/usePrefetchFileContents';
+import { MobileGlassSurface } from '@/components/MobileGlass';
 
 export default React.memo(function FilesScreen() {
     const router = useRouter();
@@ -28,9 +29,7 @@ export default React.memo(function FilesScreen() {
     const [searchQuery, setSearchQuery] = React.useState('');
     const [searchResults, setSearchResults] = React.useState<FileItem[]>([]);
     const [isSearching, setIsSearching] = React.useState(false);
-    const projectGitStatus = useSessionProjectGitStatus(sessionId!);
-    const sessionGitStatus = useSessionGitStatus(sessionId!);
-    const gitStatus = projectGitStatus || sessionGitStatus;
+    const gitStatus = useSessionGitStatus(sessionId!);
     const { theme } = useUnistyles();
 
     // Refs for shaking deleted file items
@@ -179,18 +178,24 @@ export default React.memo(function FilesScreen() {
     };
 
     return (
-        <View style={[styles.container, { backgroundColor: theme.colors.surface }]}>
+        <View style={styles.container}>
 
             {/* Search Input - Always Visible */}
             <View style={{
                 padding: 16,
-                borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
+                borderBottomWidth: Platform.select({ web: 1, default: 0 }),
                 borderBottomColor: theme.colors.divider
             }}>
+                <MobileGlassSurface
+                    enabled={Platform.OS !== 'web'}
+                    interactive
+                    intensity={70}
+                    style={styles.searchGlass}
+                >
                 <View style={{
                     flexDirection: 'row',
                     alignItems: 'center',
-                    backgroundColor: theme.colors.input.background,
+                    backgroundColor: Platform.select({ web: theme.colors.input.background, default: 'transparent' }),
                     borderRadius: 10,
                     paddingHorizontal: 12,
                     paddingVertical: 8
@@ -210,13 +215,14 @@ export default React.memo(function FilesScreen() {
                         autoCorrect={false}
                     />
                 </View>
+                </MobileGlassSurface>
             </View>
 
             {/* Header with branch info */}
             {!isLoading && gitStatusFiles && (
                 <View style={{
                     padding: 16,
-                    borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
+                    borderBottomWidth: Platform.select({ web: 1, default: 0 }),
                     borderBottomColor: theme.colors.divider
                 }}>
                     <View style={{
@@ -245,7 +251,12 @@ export default React.memo(function FilesScreen() {
             )}
 
             {/* Git Status List */}
-            <ItemList style={{ flex: 1 }}>
+            <MobileGlassSurface
+                enabled={Platform.OS !== 'web'}
+                intensity={56}
+                style={styles.fileListGlass}
+            >
+            <ItemList style={{ flex: 1, backgroundColor: Platform.select({ web: theme.colors.groupped.background, default: 'transparent' }) }}>
                 {isLoading ? (
                     <View style={{
                         flex: 1,
@@ -338,7 +349,7 @@ export default React.memo(function FilesScreen() {
                         <>
                             {searchQuery && (
                                 <View style={{
-                                    backgroundColor: theme.colors.surfaceHigh,
+                                    backgroundColor: Platform.select({ web: theme.colors.surfaceHigh, default: theme.colors.glass.backgroundSubtle }),
                                     paddingHorizontal: 16,
                                     paddingVertical: 12,
                                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
@@ -372,7 +383,7 @@ export default React.memo(function FilesScreen() {
                         {gitStatusFiles.stagedFiles.length > 0 && (
                             <>
                                 <View style={{
-                                    backgroundColor: theme.colors.surfaceHigh,
+                                    backgroundColor: Platform.select({ web: theme.colors.surfaceHigh, default: theme.colors.glass.backgroundSubtle }),
                                     paddingHorizontal: 16,
                                     paddingVertical: 12,
                                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
@@ -402,7 +413,7 @@ export default React.memo(function FilesScreen() {
                         {gitStatusFiles.unstagedFiles.length > 0 && (
                             <>
                                 <View style={{
-                                    backgroundColor: theme.colors.surfaceHigh,
+                                    backgroundColor: Platform.select({ web: theme.colors.surfaceHigh, default: theme.colors.glass.backgroundSubtle }),
                                     paddingHorizontal: 16,
                                     paddingVertical: 12,
                                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
@@ -430,6 +441,7 @@ export default React.memo(function FilesScreen() {
                     </>
                 )}
             </ItemList>
+            </MobileGlassSurface>
         </View>
     );
 });
@@ -440,5 +452,23 @@ const styles = StyleSheet.create((theme) => ({
         maxWidth: layout.maxWidth,
         alignSelf: 'center',
         width: '100%',
+        backgroundColor: Platform.select({ web: theme.colors.surface, default: 'transparent' }),
+    },
+    searchGlass: {
+        borderRadius: 16,
+        overflow: 'hidden',
+        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+        borderColor: theme.colors.glass.border,
+        backgroundColor: Platform.select({ web: 'transparent', android: theme.colors.glass.backgroundStrong, default: 'transparent' }),
+    },
+    fileListGlass: {
+        flex: 1,
+        marginHorizontal: Platform.select({ web: 0, default: 12 }),
+        marginBottom: Platform.select({ web: 0, default: 12 }),
+        borderRadius: Platform.select({ web: 0, default: 22 }),
+        overflow: 'hidden',
+        backgroundColor: Platform.select({ web: theme.colors.surface, android: theme.colors.glass.background, default: 'transparent' }),
+        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+        borderColor: theme.colors.glass.border,
     }
 }));

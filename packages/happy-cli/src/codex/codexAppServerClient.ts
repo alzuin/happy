@@ -23,6 +23,19 @@ import type {
     NewConversationResponse,
     ResumeConversationParams,
     ResumeConversationResponse,
+    ForkConversationParams,
+    ForkConversationResponse,
+    ReadConversationParams,
+    ReadConversationResponse,
+    RollbackConversationParams,
+    RollbackConversationResponse,
+    InjectItemsParams,
+    InjectItemsResponse,
+    ThreadGoalSetParams,
+    ThreadGoalSetResponse,
+    ThreadGoalClearParams,
+    ThreadGoalClearResponse,
+    Thread,
     InterruptConversationParams,
     ReviewDecision,
     EventMsg,
@@ -50,6 +63,10 @@ type LegacyPatchChanges = Record<string, Record<string, unknown>>;
 export type ApprovalHandler = (params: {
     type: 'exec' | 'patch' | 'mcp';
     callId: string;
+    itemId?: string | null;
+    threadId?: string | null;
+    turnId?: string | null;
+    approvalId?: string | null;
     command?: string[];
     cwd?: string;
     fileChanges?: Record<string, unknown>;
@@ -60,21 +77,61 @@ export type ApprovalHandler = (params: {
     message?: string;
 }) => Promise<ReviewDecision>;
 
+function stringOrNull(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+// Codex item ids are per-thread counters, so items from collab subagent
+// threads collide with the main thread's. Scoping with the thread id keeps
+// them unique — but the SAME scoped id must be used both for the tool-call
+// events and for the approval requests of an item: the app attaches a
+// permission card to its tool call by exact id equality.
+function formatScopedItemKey(threadId: string | null, itemId: string): string {
+    return threadId ? `${threadId}:${itemId}` : itemId;
+}
+
 /**
  * Check that `codex app-server` is available.
  */
-function isAppServerAvailable(): boolean {
+function parseCodexCliVersion(version: string): { major: number; minor: number; patch: number } | null {
+    const match = version.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/);
+    if (!match) return null;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    const patch = Number(match[3]);
+    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) {
+        return null;
+    }
+    return { major, minor, patch };
+}
+
+function readCodexCliVersion(): { major: number; minor: number; patch: number } | null {
     try {
         const version = execSync('codex --version', { encoding: 'utf8', windowsHide: true }).trim();
-        const match = version.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
-        if (!match) return false;
-        const [, ver] = match;
-        const [major, minor] = ver.split('.').map(Number);
-        // app-server available in recent versions
-        return major > 0 || minor >= 100;
+        return parseCodexCliVersion(version);
     } catch {
+        return null;
+    }
+}
+
+function isAppServerAvailable(): boolean {
+    const version = readCodexCliVersion();
+    if (!version) {
         return false;
     }
+    const { major, minor } = version;
+    // app-server available in recent versions
+    return major > 0 || minor >= 100;
+}
+
+function isGoalActionsAvailable(): boolean {
+    const version = readCodexCliVersion();
+    if (!version) {
+        return false;
+    }
+    const { major, minor } = version;
+    // thread/goal/set and thread/goal/clear are present in Codex 0.140+.
+    return major > 0 || minor >= 140;
 }
 
 function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | undefined {
@@ -94,11 +151,57 @@ function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | unde
         }
 
         const entry: Record<string, unknown> = {};
-        if (typeof change.diff === 'string') {
-            entry.diff = change.diff;
+        const changeRecord = change as Record<string, unknown>;
+        const kind = changeRecord.kind && typeof changeRecord.kind === 'object' && !Array.isArray(changeRecord.kind)
+            ? changeRecord.kind as Record<string, unknown>
+            : null;
+        const type = typeof changeRecord.type === 'string'
+            ? changeRecord.type
+            : (typeof kind?.type === 'string' ? kind.type : null);
+        const movePath = changeRecord.move_path ?? kind?.move_path ?? null;
+
+        if (kind) {
+            entry.kind = kind;
+        } else if (type) {
+            entry.kind = { type, move_path: movePath };
         }
-        if (change.kind && typeof change.kind === 'object' && !Array.isArray(change.kind)) {
-            entry.kind = change.kind;
+
+        const diff = typeof changeRecord.diff === 'string'
+            ? changeRecord.diff
+            : (typeof changeRecord.unified_diff === 'string' ? changeRecord.unified_diff : null);
+        if (diff !== null) {
+            entry.diff = diff;
+        }
+
+        if (changeRecord.add && typeof changeRecord.add === 'object' && !Array.isArray(changeRecord.add)) {
+            entry.add = changeRecord.add;
+        }
+        if (changeRecord.modify && typeof changeRecord.modify === 'object' && !Array.isArray(changeRecord.modify)) {
+            entry.modify = changeRecord.modify;
+        }
+        if (changeRecord.delete && typeof changeRecord.delete === 'object' && !Array.isArray(changeRecord.delete)) {
+            entry.delete = changeRecord.delete;
+        }
+
+        const content = typeof changeRecord.content === 'string' ? changeRecord.content : null;
+        if (type === 'add' && content !== null) {
+            entry.add = { content };
+        }
+        if (type === 'delete' && content !== null) {
+            entry.delete = { content };
+        }
+
+        const oldContent = typeof changeRecord.oldContent === 'string'
+            ? changeRecord.oldContent
+            : (typeof changeRecord.old_content === 'string' ? changeRecord.old_content : null);
+        const newContent = typeof changeRecord.newContent === 'string'
+            ? changeRecord.newContent
+            : (typeof changeRecord.new_content === 'string' ? changeRecord.new_content : null);
+        if ((oldContent !== null || newContent !== null) && type !== 'add' && type !== 'delete') {
+            entry.modify = {
+                old_content: oldContent ?? '',
+                new_content: newContent ?? '',
+            };
         }
 
         normalized[path] = entry;
@@ -142,6 +245,13 @@ export class CodexAppServerClient {
     private notificationProtocol: 'unknown' | 'legacy' | 'raw' = 'unknown';
     private completedTurnIds = new Set<string>();
     private rawFileChangesByItemId = new Map<string, LegacyPatchChanges>();
+    private rawSubagentActivitySignaturesByItemId = new Map<string, Set<string>>();
+    // Approval callIds currently awaiting an answer. One codex item can raise
+    // several approval callbacks (approvalId exists to disambiguate them);
+    // the bare scoped key is kept for the first so the app's permission ↔
+    // tool-call join works, and only a concurrent second approval for the
+    // same item gets a disambiguating suffix.
+    private pendingApprovalCallIds = new Set<string>();
 
     // Handlers set by the consumer (runCodex.ts)
     private eventHandler: ((msg: EventMsg) => void) | null = null;
@@ -157,6 +267,10 @@ export class CodexAppServerClient {
 
     get turnId(): string | null {
         return this._turnId;
+    }
+
+    supportsGoalActions(): boolean {
+        return isGoalActionsAvailable();
     }
 
     setEventHandler(handler: (msg: EventMsg) => void): void {
@@ -179,6 +293,8 @@ export class CodexAppServerClient {
 
     private shouldHandleRawNotification(method: string): boolean {
         const isRawNotification = method === 'thread/started'
+            || method === 'thread/goal/updated'
+            || method === 'thread/goal/cleared'
             || method === 'turn/started'
             || method === 'turn/completed'
             || method === 'thread/status/changed'
@@ -272,6 +388,29 @@ export class CodexAppServerClient {
             return true;
         }
 
+        if (method === 'thread/goal/updated') {
+            const threadId = typeof params?.threadId === 'string'
+                ? params.threadId
+                : (typeof params?.goal?.threadId === 'string' ? params.goal.threadId : undefined);
+            const turnId = typeof params?.turnId === 'string' ? params.turnId : null;
+            this.eventHandler?.({
+                type: 'thread_goal_updated',
+                ...(threadId ? { thread_id: threadId, threadId } : {}),
+                ...(turnId ? { turn_id: turnId, turnId } : {}),
+                goal: params?.goal,
+            });
+            return true;
+        }
+
+        if (method === 'thread/goal/cleared') {
+            const threadId = typeof params?.threadId === 'string' ? params.threadId : undefined;
+            this.eventHandler?.({
+                type: 'thread_goal_cleared',
+                ...(threadId ? { thread_id: threadId, threadId } : {}),
+            });
+            return true;
+        }
+
         if (method === 'thread/tokenUsage/updated') {
             const tokenUsage = params?.tokenUsage;
             if (tokenUsage && typeof tokenUsage === 'object') {
@@ -289,7 +428,10 @@ export class CodexAppServerClient {
         }
 
         if (method === 'item/started' && item.type === 'commandExecution') {
-            const callId = typeof item.id === 'string' ? item.id : '';
+            const itemId = typeof item.id === 'string' ? item.id : '';
+            // Scoped the same way as the approval request for this item, so
+            // the app can attach the permission card to the tool call.
+            const callId = itemId ? formatScopedItemKey(stringOrNull(params?.threadId) ?? this._threadId, itemId) : '';
             this.eventHandler?.({
                 type: 'exec_command_begin',
                 call_id: callId,
@@ -302,7 +444,8 @@ export class CodexAppServerClient {
         }
 
         if (method === 'item/completed' && item.type === 'commandExecution') {
-            const callId = typeof item.id === 'string' ? item.id : '';
+            const itemId = typeof item.id === 'string' ? item.id : '';
+            const callId = itemId ? formatScopedItemKey(stringOrNull(params?.threadId) ?? this._threadId, itemId) : '';
             this.eventHandler?.({
                 type: 'exec_command_end',
                 call_id: callId,
@@ -318,18 +461,20 @@ export class CodexAppServerClient {
         }
 
         if (item.type === 'fileChange') {
-            const callId = typeof item.id === 'string' ? item.id : '';
+            const itemId = typeof item.id === 'string' ? item.id : '';
+            const threadId = stringOrNull(params?.threadId) ?? this._threadId;
+            const itemKey = itemId ? formatScopedItemKey(threadId, itemId) : '';
             const changes = normalizeRawFileChangeList(item.changes);
 
-            if (callId && changes) {
-                this.rawFileChangesByItemId.set(callId, changes);
+            if (itemId && changes) {
+                this.rawFileChangesByItemId.set(itemKey, changes);
             }
 
             if (method === 'item/started') {
                 this.eventHandler?.({
                     type: 'patch_apply_begin',
-                    call_id: callId,
-                    callId,
+                    call_id: itemKey,
+                    callId: itemKey,
                     changes: changes ?? {},
                 });
                 return true;
@@ -338,16 +483,86 @@ export class CodexAppServerClient {
             if (method === 'item/completed') {
                 this.eventHandler?.({
                     type: 'patch_apply_end',
-                    call_id: callId,
-                    callId,
+                    call_id: itemKey,
+                    callId: itemKey,
                     status: item.status,
                 });
 
-                if (callId && (item.status === 'completed' || item.status === 'failed' || item.status === 'declined')) {
-                    this.rawFileChangesByItemId.delete(callId);
+                if (itemId && (item.status === 'completed' || item.status === 'failed' || item.status === 'declined')) {
+                    this.rawFileChangesByItemId.delete(itemKey);
                 }
                 return true;
             }
+        }
+
+        if (item.type === 'collabAgentToolCall') {
+            const callId = typeof item.id === 'string' ? item.id : '';
+            const payload = {
+                call_id: callId,
+                callId,
+                tool: item.tool,
+                status: item.status,
+                sender_thread_id: item.senderThreadId,
+                senderThreadId: item.senderThreadId,
+                receiver_thread_ids: item.receiverThreadIds,
+                receiverThreadIds: item.receiverThreadIds,
+                prompt: item.prompt,
+                model: item.model,
+                reasoning_effort: item.reasoningEffort,
+                reasoningEffort: item.reasoningEffort,
+                agents_states: item.agentsStates,
+                agentsStates: item.agentsStates,
+            };
+
+            if (method === 'item/started') {
+                this.eventHandler?.({
+                    type: 'collab_agent_begin',
+                    ...payload,
+                });
+                return true;
+            }
+
+            if (method === 'item/completed') {
+                this.eventHandler?.({
+                    type: 'collab_agent_end',
+                    ...payload,
+                });
+                return true;
+            }
+        }
+
+        if (item.type === 'subAgentActivity') {
+            if (method === 'item/started' || method === 'item/completed') {
+                const itemId = typeof item.id === 'string' ? item.id : '';
+                const threadId = stringOrNull(params?.threadId);
+                const itemKey = itemId ? formatScopedItemKey(threadId, itemId) : '';
+                const signature = [
+                    String(item.kind ?? ''),
+                    String(item.agentThreadId ?? ''),
+                    String(item.agentPath ?? ''),
+                ].join('\0');
+                const seenSignatures = itemKey
+                    ? this.rawSubagentActivitySignaturesByItemId.get(itemKey)
+                    : undefined;
+                if (seenSignatures?.has(signature)) {
+                    return true;
+                }
+                if (itemKey) {
+                    const signatures = seenSignatures ?? new Set<string>();
+                    signatures.add(signature);
+                    this.rawSubagentActivitySignaturesByItemId.set(itemKey, signatures);
+                }
+                this.eventHandler?.({
+                    type: 'subagent_activity',
+                    item_id: item.id,
+                    kind: item.kind,
+                    agent_thread_id: item.agentThreadId,
+                    agentThreadId: item.agentThreadId,
+                    agent_path: item.agentPath,
+                    agentPath: item.agentPath,
+                });
+            }
+            return true;
         }
 
         if (method === 'item/completed' && item.type === 'agentMessage') {
@@ -597,6 +812,7 @@ export class CodexAppServerClient {
         const result = await this.request('thread/start', params) as NewConversationResponse;
         this._threadId = result.thread.id;
         this._turnId = null;
+        this.rawSubagentActivitySignaturesByItemId.clear();
         this.rememberThreadDefaults(opts);
         logger.debug('[CodexAppServer] Thread started:', this._threadId);
         return { threadId: result.thread.id, model: result.model };
@@ -632,6 +848,7 @@ export class CodexAppServerClient {
         const result = await this.request('thread/resume', params) as ResumeConversationResponse;
         this._threadId = result.thread.id;
         this._turnId = null;
+        this.rawSubagentActivitySignaturesByItemId.clear();
         this.rememberThreadDefaults({
             model: opts?.model ?? defaults.model,
             cwd: opts?.cwd ?? defaults.cwd,
@@ -641,6 +858,100 @@ export class CodexAppServerClient {
         });
         logger.debug('[CodexAppServer] Thread resumed:', this._threadId);
         return { threadId: result.thread.id, model: result.model };
+    }
+
+    async forkThread(opts: {
+        threadId: string;
+        model?: string;
+        cwd?: string;
+        approvalPolicy?: ApprovalPolicy;
+        sandbox?: SandboxMode;
+        mcpServers?: Record<string, unknown>;
+    }): Promise<{ threadId: string; model: string; thread: Thread }> {
+        const defaults = this.threadDefaults ?? {};
+        const params: ForkConversationParams = {
+            threadId: opts.threadId,
+            model: opts.model ?? defaults.model ?? null,
+            modelProvider: null,
+            cwd: opts.cwd ?? defaults.cwd ?? process.cwd(),
+            approvalPolicy: opts.approvalPolicy ?? defaults.approvalPolicy ?? null,
+            sandbox: opts.sandbox ?? defaults.sandbox ?? null,
+            config: this.buildThreadConfig(opts.mcpServers ?? defaults.mcpServers),
+            baseInstructions: null,
+            developerInstructions: null,
+            ephemeral: false,
+            threadSource: null,
+        };
+
+        const result = await this.request('thread/fork', params) as ForkConversationResponse;
+        this._threadId = result.thread.id;
+        this._turnId = null;
+        this.rememberThreadDefaults({
+            model: opts.model ?? defaults.model,
+            cwd: opts.cwd ?? defaults.cwd,
+            approvalPolicy: opts.approvalPolicy ?? defaults.approvalPolicy,
+            sandbox: opts.sandbox ?? defaults.sandbox,
+            mcpServers: opts.mcpServers ?? defaults.mcpServers,
+        });
+        logger.debug('[CodexAppServer] Thread forked:', opts.threadId, '->', this._threadId);
+        return { threadId: result.thread.id, model: result.model, thread: result.thread };
+    }
+
+    async readThread(opts: {
+        threadId: string;
+        includeTurns?: boolean;
+    }): Promise<ReadConversationResponse> {
+        const params: ReadConversationParams = {
+            threadId: opts.threadId,
+            includeTurns: opts.includeTurns ?? true,
+        };
+        return await this.request('thread/read', params) as ReadConversationResponse;
+    }
+
+    async rollbackThread(opts: {
+        threadId: string;
+        numTurns: number;
+    }): Promise<RollbackConversationResponse> {
+        const params: RollbackConversationParams = {
+            threadId: opts.threadId,
+            numTurns: opts.numTurns,
+        };
+        return await this.request('thread/rollback', params) as RollbackConversationResponse;
+    }
+
+    async injectItems(opts: {
+        threadId: string;
+        items: unknown[];
+    }): Promise<InjectItemsResponse> {
+        const params: InjectItemsParams = {
+            threadId: opts.threadId,
+            items: opts.items,
+        };
+        return await this.request('thread/inject_items', params) as InjectItemsResponse;
+    }
+
+    async setGoal(opts: {
+        threadId: string;
+        objective: string;
+        status?: ThreadGoalSetParams['status'];
+        tokenBudget?: number | null;
+    }): Promise<ThreadGoalSetResponse> {
+        const params: ThreadGoalSetParams = {
+            threadId: opts.threadId,
+            objective: opts.objective,
+            ...(opts.status !== undefined ? { status: opts.status } : {}),
+            ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
+        };
+        return await this.request('thread/goal/set', params) as ThreadGoalSetResponse;
+    }
+
+    async clearGoal(opts: {
+        threadId: string;
+    }): Promise<ThreadGoalClearResponse> {
+        const params: ThreadGoalClearParams = {
+            threadId: opts.threadId,
+        };
+        return await this.request('thread/goal/clear', params) as ThreadGoalClearResponse;
     }
 
     async reconnectAndResumeThread(): Promise<boolean> {
@@ -733,10 +1044,13 @@ export class CodexAppServerClient {
             return { hadActiveTurn: false, aborted: false, forcedRestart: false, resumedThread: false };
         }
 
-        // Best-effort interrupt request first.
-        await this.interruptTurn();
-
         const gracePeriodMs = opts?.gracePeriodMs ?? CodexAppServerClient.ABORT_GRACE_MS;
+        // Best-effort interrupt request first, but do not block the fallback on
+        // the interrupt RPC itself. Codex can stop emitting responses while a
+        // tool/subagent/MCP call is wedged, and in that case the restart fallback
+        // is the mechanism that actually makes Stop Execution reliable.
+        void this.interruptTurn({ timeoutMs: Math.max(1, gracePeriodMs) });
+
         const settled = await this.waitForTurnCompletion(gracePeriodMs);
         if (settled) {
             return { hadActiveTurn: true, aborted: true, forcedRestart: false, resumedThread: false };
@@ -771,14 +1085,18 @@ export class CodexAppServerClient {
         approvalPolicy?: ApprovalPolicy;
         sandbox?: SandboxMode;
         effort?: ReasoningEffort;
+        extraInputItems?: InputItem[];
     }): Promise<void> {
         if (!this._threadId) {
             throw new Error('No active thread. Call startThread first.');
         }
 
-        const input: InputItem[] = [
-            { type: 'text', text: prompt },
-        ];
+        const extraInputItems = opts?.extraInputItems ?? [];
+        const input: InputItem[] = [];
+        if (prompt.length > 0 || extraInputItems.length === 0) {
+            input.push({ type: 'text', text: prompt });
+        }
+        input.push(...extraInputItems);
 
         // Build params — only include optional fields when set (server uses thread defaults otherwise)
         const params: Record<string, unknown> = {
@@ -831,6 +1149,7 @@ export class CodexAppServerClient {
         approvalPolicy?: ApprovalPolicy;
         sandbox?: SandboxMode;
         effort?: ReasoningEffort;
+        extraInputItems?: InputItem[];
         turnTimeoutMs?: number;
     }): Promise<{ aborted: boolean }> {
         // Wait for any in-flight interruptTurn() to complete before starting a new
@@ -874,7 +1193,7 @@ export class CodexAppServerClient {
         return { aborted };
     }
 
-    async interruptTurn(): Promise<void> {
+    async interruptTurn(opts?: { timeoutMs?: number }): Promise<void> {
         if (!this._threadId) return;
         if (!this._turnId) {
             logger.debug('[CodexAppServer] interruptTurn: no active turnId, skipping');
@@ -886,7 +1205,7 @@ export class CodexAppServerClient {
         };
         const doInterrupt = async () => {
             try {
-                await this.request('turn/interrupt', params);
+                await this.request('turn/interrupt', params, opts?.timeoutMs);
             } catch (err) {
                 // Ignore if no turn is active
                 logger.debug('[CodexAppServer] interruptTurn error (may be expected):', err);
@@ -902,6 +1221,19 @@ export class CodexAppServerClient {
 
     hasActiveThread(): boolean {
         return this._threadId !== null;
+    }
+
+    clearThreadState(): void {
+        logger.debug(
+            `[CodexAppServer] Clearing thread state: thread=${this._threadId ?? 'none'} turn=${this._turnId ?? 'none'}`,
+        );
+        this.resolvePendingTurn(true);
+        this._threadId = null;
+        this._turnId = null;
+        this.threadDefaults = null;
+        this.completedTurnIds.clear();
+        this.rawFileChangesByItemId.clear();
+        this.rawSubagentActivitySignaturesByItemId.clear();
     }
 
     // ─── JSON-RPC transport ─────────────────────────────────────
@@ -1078,13 +1410,21 @@ export class CodexAppServerClient {
 
     private async handleServerRequest(id: number, method: string, params: any): Promise<void> {
         if (method === 'mcpServer/elicitation/request') {
-            const toolName = this.parseToolNameFromElicitationMessage(params?.message) ?? params?.serverName ?? 'McpTool';
+            const threadId = stringOrNull(params?.threadId) ?? this._threadId;
+            const turnId = stringOrNull(params?.turnId);
+            const serverName = stringOrNull(params?.serverName) ?? 'mcp';
+            const toolName = this.parseToolNameFromElicitationMessage(params?.message) ?? serverName;
+            const itemId = `${serverName}:${id}`;
             const decision = await this.handleApproval({
                 type: 'mcp',
-                callId: `${params?.serverName ?? 'mcp'}:${id}`,
+                callId: formatScopedItemKey(threadId, itemId),
+                itemId,
+                threadId,
+                turnId,
+                approvalId: String(id),
                 toolName,
                 input: params?._meta?.tool_params ?? {},
-                serverName: params?.serverName,
+                serverName,
                 message: params?.message,
             });
             this.respond(id, this.mapDecisionToMcpElicitationResponse(decision, params));
@@ -1094,37 +1434,82 @@ export class CodexAppServerClient {
         // Command execution approval
         if (method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval') {
             const legacy = method === 'execCommandApproval';
-            const callId = params.itemId ?? params.callId ?? String(id);
-            const decision = await this.handleApproval({
-                type: 'exec',
-                callId,
-                command: params.command != null ? [params.command] : [],
-                cwd: params.cwd,
-                reason: params.reason,
-            });
-            this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) });
+            const threadId = stringOrNull(params?.threadId) ?? stringOrNull(params?.conversationId) ?? this._threadId;
+            const turnId = stringOrNull(params?.turnId);
+            const itemId = stringOrNull(params?.itemId) ?? stringOrNull(params?.callId) ?? String(id);
+            const approvalId = stringOrNull(params?.approvalId);
+            // Legacy events pass through with raw call ids, so legacy
+            // approvals must stay raw too; v2 uses the scoped item key that
+            // exec_command_begin emitted for this item, so the app joins
+            // permission ↔ tool call by exact id equality. Only a concurrent
+            // second approval for the same item gets an approvalId suffix.
+            const callId = legacy
+                ? itemId
+                : this.resolveApprovalCallId(formatScopedItemKey(threadId, itemId), approvalId ?? String(id));
+            this.pendingApprovalCallIds.add(callId);
+            try {
+                const decision = await this.handleApproval({
+                    type: 'exec',
+                    callId,
+                    itemId,
+                    threadId,
+                    turnId,
+                    approvalId,
+                    command: Array.isArray(params.command)
+                        ? params.command
+                        : params.command != null ? [params.command] : [],
+                    cwd: params.cwd,
+                    reason: params.reason,
+                });
+                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) });
+            } finally {
+                this.pendingApprovalCallIds.delete(callId);
+            }
             return;
         }
 
         // File change / patch approval
         if (method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval') {
             const legacy = method === 'applyPatchApproval';
-            const callId = params.itemId ?? params.callId ?? String(id);
-            const decision = await this.handleApproval({
-                type: 'patch',
-                callId,
-                fileChanges: params.fileChanges ?? (typeof callId === 'string'
-                    ? this.rawFileChangesByItemId.get(callId)
-                    : undefined),
-                reason: params.reason,
-            });
-            this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) });
+            const threadId = stringOrNull(params?.threadId) ?? stringOrNull(params?.conversationId) ?? this._threadId;
+            const turnId = stringOrNull(params?.turnId);
+            const itemId = stringOrNull(params?.itemId) ?? stringOrNull(params?.callId) ?? String(id);
+            const itemKey = formatScopedItemKey(threadId, itemId);
+            const callId = legacy ? itemId : this.resolveApprovalCallId(itemKey, String(id));
+            this.pendingApprovalCallIds.add(callId);
+            try {
+                const decision = await this.handleApproval({
+                    type: 'patch',
+                    callId,
+                    itemId,
+                    threadId,
+                    turnId,
+                    fileChanges: params.fileChanges ?? (typeof itemId === 'string'
+                        ? this.rawFileChangesByItemId.get(itemKey) ?? this.rawFileChangesByItemId.get(itemId)
+                        : undefined),
+                    reason: params.reason,
+                });
+                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) });
+            } finally {
+                this.pendingApprovalCallIds.delete(callId);
+            }
             return;
         }
 
         // Unknown server request — respond so server doesn't hang
         logger.debug(`[CodexAppServer] Unknown server request: ${method}`);
         this.respond(id, {});
+    }
+
+    // The bare scoped key keeps the app's permission ↔ tool-call join for the
+    // common single-approval case; a SECOND approval arriving while the first
+    // is still pending gets a disambiguating suffix instead of silently
+    // overwriting the first one's pending entry (which would orphan its
+    // promise and hang the codex request forever).
+    private resolveApprovalCallId(baseCallId: string, disambiguator: string): string {
+        return this.pendingApprovalCallIds.has(baseCallId)
+            ? `${baseCallId}:${disambiguator}`
+            : baseCallId;
     }
 
     private async handleApproval(params: Parameters<ApprovalHandler>[0]): Promise<ReviewDecision> {

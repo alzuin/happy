@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Pressable, FlatList, Platform } from 'react-native';
+import { View, Pressable, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform } from 'react-native';
 import { Text } from '@/components/StyledText';
 import { usePathname } from 'expo-router';
 import { SessionListViewItem, SessionRowData } from '@/sync/storage';
@@ -21,6 +21,8 @@ import { SessionActionsAnchor, SessionActionsPopover } from './SessionActionsPop
 import { useSessionActionAlert } from '@/hooks/useSessionQuickActions';
 import { useSettingMutable } from '@/sync/storage';
 import { t } from '@/text';
+import { SessionShortcutHintBadge } from './ShortcutHints';
+import { ProviderIcon } from './ProviderIcon';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -50,7 +52,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     projectGroup: {
         paddingHorizontal: 16,
         paddingVertical: 10,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: Platform.select({ web: theme.colors.surface, default: theme.colors.surfaceHigh }),
     },
     projectGroupTitle: {
         fontSize: 13,
@@ -69,12 +71,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 16,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: 'transparent',
     },
     sessionItemContainer: {
         marginHorizontal: 16,
         marginBottom: 1,
         overflow: 'hidden',
+        backgroundColor: theme.colors.surface,
+        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+        borderColor: theme.colors.divider,
     },
     sessionItemFirst: {
         borderTopLeftRadius: 12,
@@ -119,16 +124,26 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         ...Typography.default('semiBold'),
     },
+    sessionShortcutBadge: {
+        flexShrink: 0,
+        marginLeft: 8,
+    },
     sessionTitleConnected: {
         color: theme.colors.text,
     },
     sessionTitleDisconnected: {
         color: theme.colors.textSecondary,
     },
+    sessionSubtitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        marginBottom: 4,
+    },
     sessionSubtitle: {
         fontSize: 13,
         color: theme.colors.textSecondary,
-        marginBottom: 4,
+        flexShrink: 1,
         ...Typography.default(),
     },
     statusRow: {
@@ -168,7 +183,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     artifactsSection: {
         paddingHorizontal: 16,
         paddingBottom: 12,
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: Platform.select({ web: theme.colors.groupped.background, default: 'transparent' }),
     },
     archiveToggle: {
         flexDirection: 'row',
@@ -190,30 +205,89 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export function SessionsList() {
+export function SessionsList({
+    topContentInset = 0,
+    bottomContentInset = 128,
+    onScroll,
+    searchQuery = '',
+}: {
+    topContentInset?: number;
+    bottomContentInset?: number;
+    onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+    searchQuery?: string;
+} = {}) {
     const styles = stylesheet;
     const safeArea = useSafeAreaInsets();
-    const data = useVisibleSessionListViewData();
+    const sourceData = useVisibleSessionListViewData();
     const pathname = usePathname();
     const isTablet = useIsTablet();
     const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
     const toggleArchived = React.useCallback(() => {
         setHideInactiveSessions(!hideInactiveSessions);
     }, [hideInactiveSessions, setHideInactiveSessions]);
-    const selectable = isTablet;
-    const dataWithSelected = selectable ? React.useMemo(() => {
-        return data?.map(item => ({
-            ...item,
-            selected: pathname.startsWith(`/session/${item.type === 'session' ? item.session.id : ''}`)
-        }));
-    }, [data, pathname]) : data;
+    // Selection is derived once from pathname so the data array stays stable
+    // across navigations. This keeps FlatList virtualization intact: only
+    // the previously- and newly-selected rows re-render, instead of the
+    // whole visible window.
+    const selectedSessionId = React.useMemo<string | undefined>(() => {
+        if (!isTablet) return undefined;
+        if (!pathname.startsWith('/session/')) return undefined;
+        return pathname.split('/')[2];
+    }, [isTablet, pathname]);
 
     // Request review
     React.useEffect(() => {
-        if (data && data.length > 0) {
+        if (sourceData && sourceData.length > 0) {
             requestReview();
         }
-    }, [data && data.length > 0]);
+    }, [sourceData && sourceData.length > 0]);
+
+    const data = React.useMemo(() => {
+        const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+        if (!sourceData || !normalizedQuery) {
+            return sourceData;
+        }
+
+        const matches = (session: SessionRowData) => [
+            session.name,
+            session.subtitle,
+            session.path,
+            session.machineId,
+            session.flavor,
+        ].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
+
+        const keepIndices = new Set<number>();
+        let currentHeaderIndex: number | null = null;
+        let currentProjectIndex: number | null = null;
+
+        sourceData.forEach((item, index) => {
+            if (item.type === 'header') {
+                currentHeaderIndex = index;
+                currentProjectIndex = null;
+                return;
+            }
+            if (item.type === 'project-group') {
+                currentProjectIndex = index;
+                return;
+            }
+            if (item.type === 'session' && matches(item.session)) {
+                keepIndices.add(index);
+                if (currentHeaderIndex !== null) keepIndices.add(currentHeaderIndex);
+                if (currentProjectIndex !== null) keepIndices.add(currentProjectIndex);
+            }
+        });
+
+        const result: SessionListViewItem[] = [];
+        sourceData.forEach((item, index) => {
+            if (item.type === 'active-sessions') {
+                const sessions = item.sessions.filter(matches);
+                if (sessions.length > 0) result.push({ ...item, sessions });
+                return;
+            }
+            if (keepIndices.has(index)) result.push(item);
+        });
+        return result;
+    }, [searchQuery, sourceData]);
 
     // Early return if no data yet
     if (!data) {
@@ -222,7 +296,7 @@ export function SessionsList() {
         );
     }
 
-    const keyExtractor = React.useCallback((item: SessionListViewItem & { selected?: boolean }, index: number) => {
+    const keyExtractor = React.useCallback((item: SessionListViewItem, index: number) => {
         switch (item.type) {
             case 'header': return `header-${item.title}-${index}`;
             case 'active-sessions': return 'active-sessions';
@@ -232,7 +306,7 @@ export function SessionsList() {
         }
     }, []);
 
-    const renderItem = React.useCallback(({ item, index }: { item: SessionListViewItem & { selected?: boolean }, index: number }) => {
+    const renderItem = React.useCallback(({ item, index }: { item: SessionListViewItem, index: number }) => {
         switch (item.type) {
             case 'header':
                 return (
@@ -255,17 +329,10 @@ export function SessionsList() {
                 );
 
             case 'active-sessions':
-                // Extract just the session ID from pathname (e.g., /session/abc123/file -> abc123)
-                let selectedId: string | undefined;
-                if (isTablet && pathname.startsWith('/session/')) {
-                    const parts = pathname.split('/');
-                    selectedId = parts[2]; // parts[0] is empty, parts[1] is 'session', parts[2] is the ID
-                }
-
                 return (
                     <ActiveSessionsGroupCompact
                         sessions={item.sessions}
-                        selectedSessionId={selectedId}
+                        selectedSessionId={selectedSessionId}
                     />
                 );
 
@@ -283,24 +350,25 @@ export function SessionsList() {
 
             case 'session':
                 // Determine card styling based on position within date group
-                const prevItem = index > 0 && dataWithSelected ? dataWithSelected[index - 1] : null;
-                const nextItem = index < (dataWithSelected?.length || 0) - 1 && dataWithSelected ? dataWithSelected[index + 1] : null;
+                const prevItem = index > 0 ? data[index - 1] : null;
+                const nextItem = index < data.length - 1 ? data[index + 1] : null;
 
                 const isFirst = prevItem?.type === 'header';
                 const isLast = nextItem?.type === 'header' || nextItem == null || nextItem?.type === 'active-sessions';
                 const isSingle = isFirst && isLast;
+                const selected = item.session.id === selectedSessionId;
 
                 return (
                     <SessionItem
                         session={item.session}
-                        selected={item.selected}
+                        selected={selected}
                         isFirst={isFirst}
                         isLast={isLast}
                         isSingle={isSingle}
                     />
                 );
         }
-    }, [pathname, dataWithSelected, toggleArchived]);
+    }, [selectedSessionId, data, toggleArchived]);
 
 
     // Remove this section as we'll use FlatList for all items now
@@ -318,14 +386,26 @@ export function SessionsList() {
         <View style={styles.container}>
             <View style={styles.contentContainer}>
                 <FlatList
-                    data={dataWithSelected}
+                    data={data}
                     renderItem={renderItem}
                     keyExtractor={keyExtractor}
-                    contentContainerStyle={{ paddingBottom: safeArea.bottom + 128, maxWidth: layout.maxWidth }}
+                    extraData={selectedSessionId}
+                    contentContainerStyle={{
+                        paddingTop: topContentInset,
+                        paddingBottom: safeArea.bottom + bottomContentInset,
+                        maxWidth: layout.maxWidth,
+                    }}
                     ListHeaderComponent={HeaderComponent}
+                    ListEmptyComponent={searchQuery.trim() ? (
+                        <View style={{ paddingTop: 48, alignItems: 'center' }}>
+                            <Text style={styles.headerText}>{t('sessionHistory.empty')}</Text>
+                        </View>
+                    ) : null}
                     windowSize={5}
                     maxToRenderPerBatch={8}
                     initialNumToRender={12}
+                    onScroll={onScroll}
+                    scrollEventThrottle={16}
                 />
             </View>
         </View>
@@ -349,19 +429,25 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
     const styles = stylesheet;
     const navigateToSession = useNavigateToSession();
     const [actionsAnchor, setActionsAnchor] = React.useState<SessionActionsAnchor | null>(null);
-    const status = STATUS_CONFIG[session.state];
+    const baseStatus = STATUS_CONFIG[session.state];
+    // Override to solid blue when session has unread results
+    const status = session.hasUnread
+        ? { ...baseStatus, color: '#007AFF', dotColor: '#007AFF', isPulsing: false, isConnected: baseStatus.isConnected }
+        : baseStatus;
 
     const vibingMessage = React.useMemo(() => {
         return vibingMessages[Math.floor(Math.random() * vibingMessages.length)].toLowerCase() + '…';
     }, [session.state]);
 
-    const statusText = session.state === 'thinking'
-        ? vibingMessage
-        : session.state === 'disconnected'
-            ? t('status.lastSeen', { time: formatLastSeen(session.activeAt!, false) })
-            : session.state === 'permission_required'
-                ? t('status.permissionRequired')
-                : t('status.online');
+    const statusText = session.hasUnread
+        ? t('status.unread')
+        : session.state === 'thinking'
+            ? vibingMessage
+            : session.state === 'disconnected'
+                ? t('status.lastSeen', { time: formatLastSeen(session.activeAt!, false) })
+                : session.state === 'permission_required'
+                    ? t('status.permissionRequired')
+                    : t('status.online');
 
     const handlePress = React.useCallback(() => {
         navigateToSession(session.id);
@@ -403,7 +489,7 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
             {...menuProps}
         >
             <View style={styles.avatarContainer}>
-                <Avatar id={session.avatarId} size={48} monochrome={!status.isConnected} flavor={session.flavor} />
+                <Avatar id={session.avatarId} size={48} monochrome={!status.isConnected} flavor={session.flavor} clientId={session.clientId} />
                 {session.hasDraft && (
                     <View style={styles.draftIconContainer}>
                         <Ionicons
@@ -422,11 +508,30 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
                     ]} numberOfLines={1}>
                         {session.name}
                     </Text>
+                    <SessionShortcutHintBadge
+                        sessionId={session.id}
+                        style={styles.sessionShortcutBadge}
+                    />
                 </View>
 
-                <Text style={styles.sessionSubtitle} numberOfLines={1}>
-                    {session.subtitle}
-                </Text>
+                {session.identityLine ? (
+                    <View style={styles.sessionSubtitleRow}>
+                        <ProviderIcon kind={session.providerKind} size={13} />
+                        <Text style={styles.sessionSubtitle} numberOfLines={1}>
+                            {session.identityLine}
+                        </Text>
+                    </View>
+                ) : session.path ? (
+                    <View style={styles.sessionSubtitleRow}>
+                        <Text style={styles.sessionSubtitle} numberOfLines={1}>
+                            {session.path.split(/[/\\]/).filter(Boolean).pop()}
+                        </Text>
+                    </View>
+                ) : (
+                    <Text style={styles.sessionSubtitle} numberOfLines={1}>
+                        {session.subtitle}
+                    </Text>
+                )}
 
                 <View style={styles.statusRow}>
                     <View style={styles.statusDotContainer}>
@@ -436,7 +541,7 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
                         styles.statusText,
                         { color: status.color }
                     ]}>
-                        {statusText}
+                        {session.modelName ? `${session.modelName} · ` : ''}{statusText}{session.activitySummary ? ` · ${session.activitySummary}` : ''}
                     </Text>
                 </View>
             </View>

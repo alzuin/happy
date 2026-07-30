@@ -1,5 +1,6 @@
 import { EnhancedMode } from "./loop";
-import { query, type QueryOptions, type SDKMessage, type SDKSystemMessage, AbortError, SDKUserMessage } from '@/claude/sdk'
+import { query, type CanCallToolOptions, type QueryOptions, type SDKMessage, type SDKSystemMessage, AbortError, SDKUserMessage } from '@/claude/sdk'
+import type { MessageParam } from '@anthropic-ai/sdk/resources'
 import { mapToClaudeMode } from "./utils/permissionMode";
 import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { join } from 'node:path';
@@ -11,6 +12,8 @@ import { awaitFileExist } from "@/modules/watcher/awaitFileExist";
 import { systemPrompt } from "./utils/systemPrompt";
 import { PermissionResult } from "./sdk/types";
 import type { JsRuntime } from "./runClaude";
+import { fromRateLimitEvent, windowsFromGetUsage, type UnboundRateLimit, type UsageLimitsPatch, type RateLimitEventInfo } from "./utils/usageLimits";
+import type { UsageLimitWindow } from "@/api/types";
 
 export async function claudeRemote(opts: {
 
@@ -22,7 +25,7 @@ export async function claudeRemote(opts: {
     claudeArgs?: string[],
     allowedTools: string[],
     signal?: AbortSignal,
-    canCallTool: (toolName: string, input: unknown, mode: EnhancedMode, options: { signal: AbortSignal; toolUseID: string }) => Promise<PermissionResult>,
+    canCallTool: (toolName: string, input: unknown, mode: EnhancedMode, options: CanCallToolOptions) => Promise<PermissionResult>,
     /** Called when the Query object is ready — allows permission handler to call setPermissionMode */
     onQueryReady?: (query: { setPermissionMode: (mode: string) => Promise<void> }) => void,
     /** Path to temporary settings file with SessionStart hook (required for session tracking) */
@@ -31,7 +34,7 @@ export async function claudeRemote(opts: {
     jsRuntime?: JsRuntime,
 
     // Dynamic parameters
-    nextMessage: () => Promise<{ message: string, mode: EnhancedMode } | null>,
+    nextMessage: () => Promise<{ message: MessageParam['content'], mode: EnhancedMode } | null>,
     onReady: () => void,
     isAborted: (toolCallId: string) => boolean,
 
@@ -41,7 +44,9 @@ export async function claudeRemote(opts: {
     onMessage: (message: SDKMessage) => void,
     onCompletionEvent?: (message: string) => void,
     onSessionReset?: () => void,
-    onSDKMetadata?: (metadata: { tools?: string[]; slashCommands?: string[]; mcpServers?: { name: string; status: string }[]; skills?: string[] }) => void
+    onSDKMetadata?: (metadata: { tools?: string[]; slashCommands?: string[]; mcpServers?: { name: string; status: string }[]; skills?: string[] }) => void,
+    /** Per-turn plan rate-limit delta; the launcher merges it into agent state. */
+    onUsageLimits?: (patch: UsageLimitsPatch) => void
 }) {
 
     // Check if session is valid
@@ -89,8 +94,11 @@ export async function claudeRemote(opts: {
         return;
     }
 
-    // Handle special commands
-    const specialCommand = parseSpecialCommand(initial.message);
+    // Handle special commands (extract text for parsing when content is a block array)
+    const initialText = typeof initial.message === 'string'
+        ? initial.message
+        : (initial.message.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined)?.text ?? '';
+    const specialCommand = parseSpecialCommand(initialText);
 
     // Handle /clear command
     if (specialCommand.type === 'clear') {
@@ -100,6 +108,7 @@ export async function claudeRemote(opts: {
         if (opts.onSessionReset) {
             opts.onSessionReset();
         }
+        opts.onReady();
         return;
     }
 
@@ -126,7 +135,8 @@ export async function claudeRemote(opts: {
         appendSystemPrompt: initial.mode.appendSystemPrompt ? initial.mode.appendSystemPrompt + '\n\n' + systemPrompt : systemPrompt,
         allowedTools: initial.mode.allowedTools ? initial.mode.allowedTools.concat(opts.allowedTools) : opts.allowedTools,
         disallowedTools: initial.mode.disallowedTools,
-        canCallTool: (toolName: string, input: unknown, options: { signal: AbortSignal; toolUseID: string }) => opts.canCallTool(toolName, input, mode, options),
+        effort: initial.mode.effort,
+        canCallTool: (toolName: string, input: unknown, options: CanCallToolOptions) => opts.canCallTool(toolName, input, mode, options),
         abort: opts.signal,
         settingsPath: opts.hookSettingsPath,
     }
@@ -167,6 +177,81 @@ export async function claudeRemote(opts: {
         });
     }
 
+    // Plan rate-limit accumulation: events are buffered and flushed once per
+    // result (coalescing agent-state writes to at most one per turn). The seed
+    // runs on the first result of this invocation — the Query object does not
+    // exist before the first user message, so there is no session-start hook.
+    const pendingUsageWindows = new Map<string, UsageLimitWindow>();
+    let pendingUnbound: UnboundRateLimit | null = null;
+    let usageSeeded = false;
+    let lastUsageSignature: string | null = null;
+    let lastUsageEmittedAt = 0;
+    // Identical data still gets re-written occasionally so the snapshot's
+    // capturedAt (the app's "as of" footer) doesn't misreport freshness.
+    const USAGE_REFRESH_INTERVAL_MS = 5 * 60_000;
+    const flushUsageLimits = async () => {
+        if (!opts.onUsageLimits) return;
+        let seededThisFlush = false;
+        if (!usageSeeded) {
+            usageSeeded = true;
+            // typeof-gated: the method is experimental and absent in older SDKs.
+            const usageFn = (response as any).usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+            if (typeof usageFn === 'function') {
+                try {
+                    const usage = await usageFn.call(response);
+                    if (usage?.rate_limits_available && usage.rate_limits) {
+                        for (const w of windowsFromGetUsage(usage.rate_limits)) {
+                            // Events are fresher than the seed for the same
+                            // window, but allowed events carry no utilization —
+                            // backfill the snapshot's percentage so it isn't
+                            // dropped on the floor.
+                            const pending = pendingUsageWindows.get(w.id);
+                            if (!pending) {
+                                pendingUsageWindows.set(w.id, w);
+                            } else if (pending.utilization === null || pending.utilization === undefined) {
+                                pendingUsageWindows.set(w.id, {
+                                    ...pending,
+                                    utilization: w.utilization,
+                                    resetsAt: pending.resetsAt ?? w.resetsAt,
+                                });
+                            }
+                        }
+                        seededThisFlush = true;
+                    }
+                } catch (e) {
+                    logger.debug('[claudeRemote] usage seed failed (ignored)', e);
+                }
+            }
+        }
+        if (pendingUsageWindows.size === 0 && !pendingUnbound) return;
+        const patch: UsageLimitsPatch = {
+            capturedAt: Date.now(),
+            windows: [...pendingUsageWindows.values()],
+            unbound: pendingUnbound ?? undefined,
+            // A full snapshot replaces persisted windows so ones the backend
+            // stopped reporting don't linger with a stale status.
+            replace: seededThisFlush || undefined,
+        };
+        pendingUsageWindows.clear();
+        pendingUnbound = null;
+        const signature = JSON.stringify([patch.windows, patch.unbound ?? null]);
+        if (signature === lastUsageSignature && Date.now() - lastUsageEmittedAt < USAGE_REFRESH_INTERVAL_MS) return;
+        lastUsageSignature = signature;
+        lastUsageEmittedAt = Date.now();
+        opts.onUsageLimits(patch);
+    };
+    // Serialized: a second result must not interleave with a flush that is
+    // still awaiting the seed, or it would drain the buffer mid-merge and
+    // emit a second, out-of-order patch.
+    let usageFlushChain: Promise<void> = Promise.resolve();
+    const scheduleUsageFlush = () => {
+        usageFlushChain = usageFlushChain
+            .then(flushUsageLimits)
+            .catch((e) => {
+                logger.debug('[claudeRemote] usage flush failed (ignored)', e);
+            });
+    };
+
     updateThinking(true);
     try {
         logger.debug(`[claudeRemote] Starting to iterate over response`);
@@ -174,8 +259,14 @@ export async function claudeRemote(opts: {
         for await (const message of response) {
             logger.debugLargeJson(`[claudeRemote] Message ${message.type}`, message);
 
-            // Handle messages
-            opts.onMessage(message);
+            // Handle messages. During /compact, Claude emits the generated
+            // summary as a normal assistant text message before the result.
+            // Mark it so downstream UI/protocol mapping can treat it as
+            // housekeeping instead of a real assistant response.
+            const outboundMessage = isCompactCommand && message.type === 'assistant'
+                ? { ...message, isCompactSummary: true } as SDKMessage
+                : message;
+            opts.onMessage(outboundMessage);
 
             // Handle special system messages
             if (message.type === 'system' && message.subtype === 'init') {
@@ -201,9 +292,33 @@ export async function claudeRemote(opts: {
                 if (systemInit.session_id) {
                     logger.debug(`[claudeRemote] Waiting for session file to be written to disk: ${systemInit.session_id}`);
                     const projectDir = getProjectPath(opts.path);
-                    const found = await awaitFileExist(join(projectDir, `${systemInit.session_id}.jsonl`));
+                    const found = await awaitFileExist(join(projectDir, `${systemInit.session_id}.jsonl`), 30000);
                     logger.debug(`[claudeRemote] Session file found: ${systemInit.session_id} ${found}`);
+                    if (!found) {
+                        // The transcript never landed on disk within the grace
+                        // window. We still register the id so the (now
+                        // bounded) scanner watcher can pick it up if it shows
+                        // up late and otherwise drops it cleanly instead of
+                        // wedging — but surface the anomaly so a stuck remote
+                        // launch is visible in the app rather than a silent
+                        // "dead instance".
+                        logger.debug(`[claudeRemote] WARNING: session transcript ${systemInit.session_id} never appeared after 30s`);
+                        opts.onCompletionEvent?.('⚠️ Claude session did not produce a transcript — the agent may be unresponsive. Try sending your message again.');
+                    }
                     opts.onSessionFound(systemInit.session_id);
+                }
+            }
+
+            // Buffer plan rate-limit events; flushed on the next result
+            if (message.type === 'rate_limit_event') {
+                const info = (message as { rate_limit_info?: RateLimitEventInfo }).rate_limit_info;
+                if (info) {
+                    const normalized = fromRateLimitEvent(info);
+                    if (normalized.window) {
+                        pendingUsageWindows.set(normalized.window.id, normalized.window);
+                    } else if (normalized.unbound) {
+                        pendingUnbound = normalized.unbound;
+                    }
                 }
             }
 
@@ -211,6 +326,10 @@ export async function claudeRemote(opts: {
             if (message.type === 'result') {
                 updateThinking(false);
                 logger.debug('[claudeRemote] Result received');
+
+                // Fire-and-forget: unavailable for API key / Bedrock / Vertex
+                // sessions and experimental besides, so failures are ignored.
+                scheduleUsageFlush();
 
                 // Send completion messages
                 if (isCompactCommand) {

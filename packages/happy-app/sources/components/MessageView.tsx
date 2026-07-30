@@ -1,25 +1,32 @@
 import * as React from "react";
-import { View, Text } from "react-native";
-import { StyleSheet } from 'react-native-unistyles';
+import { View, Text, Platform } from "react-native";
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { Ionicons } from '@expo/vector-icons';
 import { MarkdownView } from "./markdown/MarkdownView";
 import { t } from '@/text';
 import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@/sync/typesMessage";
 import { Metadata } from "@/sync/storageTypes";
-import { layout } from "./layout";
 import { ToolView } from "./tools/ToolView";
 import { AgentEvent } from "@/sync/typesRaw";
 import { sync } from '@/sync/sync';
+import { useSetting } from '@/sync/storage';
 import { Option } from './markdown/MarkdownView';
+import { layout } from "./layout";
+import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
+import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
 
 
-export const MessageView = (props: {
+export const MessageView = React.memo((props: {
   message: Message;
   metadata: Metadata | null;
   sessionId: string;
   getMessageById?: (id: string) => Message | null;
 }) => {
   return (
-    <View style={styles.messageContainer} renderToHardwareTextureAndroid={true}>
+    <View
+      style={styles.messageContainer}
+      renderToHardwareTextureAndroid={Platform.OS !== 'web'}
+    >
       <View style={styles.messageContent}>
         <RenderBlock
           message={props.message}
@@ -30,7 +37,7 @@ export const MessageView = (props: {
       </View>
     </View>
   );
-};
+});
 
 // RenderBlock function that dispatches to the correct component based on message kind
 function RenderBlock(props: {
@@ -41,7 +48,13 @@ function RenderBlock(props: {
 }): React.ReactElement {
   switch (props.message.kind) {
     case 'user-text':
-      return <UserTextBlock message={props.message} sessionId={props.sessionId} />;
+      return (
+        <UserTextBlock
+          message={props.message}
+          metadata={props.metadata}
+          sessionId={props.sessionId}
+        />
+      );
 
     case 'agent-text':
       return <AgentTextBlock message={props.message} sessionId={props.sessionId} />;
@@ -67,19 +80,78 @@ function RenderBlock(props: {
 
 function UserTextBlock(props: {
   message: UserTextMessage;
+  metadata: Metadata | null;
   sessionId: string;
 }) {
   const handleOptionPress = React.useCallback((option: Option) => {
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
   }, [props.sessionId]);
 
+  const userMessageBubbleColor = useSetting('userMessageBubbleColor');
+  const { theme } = useUnistyles();
+  const bubblePalette = resolveUserMessageBubbleColor(userMessageBubbleColor, theme.dark);
+  const bubbleStyle = {
+    backgroundColor: bubblePalette.background,
+    borderColor: bubblePalette.border,
+  };
+  // Claude Agent SDK emits synthetic user messages wrapped in tags like
+  // <local-command-caveat>…</local-command-caveat> and
+  // <command-message>…</command-message><command-name>/foo</command-name>
+  // whenever a slash command runs. The plain MarkdownView renders these as
+  // literal text, which looks broken. Collapse them into chips or hide
+  // them entirely depending on what kind of wrapper this is.
+  // The user's own slash-command input is shown optimistically (carries a
+  // localId); the SDK then injects the canonical wrapper chip. Hide the raw
+  // echo so we don't render the command twice. Gated to Claude flavor only:
+  // Codex/Gemini don't reliably emit the <command-*> wrapper, so hiding the
+  // echo there would drop the command with nothing to replace it. (Absent
+  // flavor == Claude, matching the convention used elsewhere.)
+  const isClaudeFlavor = !props.metadata?.flavor || props.metadata.flavor === 'claude';
+  if (isClaudeFlavor && isUserSlashCommandEcho(props.message.text, props.message.localId != null)) {
+    return null;
+  }
+
+  const parsed = parseLocalCommandMessage(props.message.displayText || props.message.text);
+  if (parsed.kind === 'caveat') {
+    return null;
+  }
+  if (parsed.kind === 'goal-confirmation') {
+    return null;
+  }
+  if (parsed.kind === 'goal-run') {
+    return (
+      <View style={styles.userMessageContainer}>
+        <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle, styles.goalMessageBubble]}>
+          <MarkdownView markdown={parsed.goal} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+        </View>
+        <View style={styles.goalSentRow}>
+          <Ionicons name="locate-outline" size={16} color={styles.goalSentText.color} />
+          <Text style={styles.goalSentText}>{t('message.sentAsGoal')}</Text>
+        </View>
+      </View>
+    );
+  }
+  if (parsed.kind === 'command-run') {
+    return (
+      <View style={styles.userMessageContainer}>
+        {parsed.args ? (
+          <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle, styles.commandMessageBubble]}>
+            <MarkdownView markdown={parsed.args} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+          </View>
+        ) : null}
+        <View style={[styles.commandChip, styles.userMessageBubbleSolid, bubbleStyle]}>
+          <Text style={styles.commandChipText}>/{parsed.commandName}</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.userMessageContainer}>
-      <View style={styles.userMessageBubble}>
-        <MarkdownView markdown={props.message.displayText || props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
-        {/* {__DEV__ && (
-          <Text style={styles.debugText}>{JSON.stringify(props.message.meta)}</Text>
-        )} */}
+      {/* Text owns long-press so native selection / Markdown Copy v2 can work
+          without also opening the rewind picker. Rewind remains in session actions. */}
+      <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle]}>
+        <MarkdownView markdown={parsed.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
       </View>
     </View>
   );
@@ -198,9 +270,48 @@ const styles = StyleSheet.create((theme) => ({
     marginBottom: 12,
     maxWidth: '100%',
   },
+  userMessageBubbleSolid: {
+    borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+    overflow: 'hidden',
+  },
+  goalMessageBubble: {
+    marginBottom: 6,
+  },
+  commandMessageBubble: {
+    marginBottom: 6,
+  },
+  goalSentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    maxWidth: '100%',
+    opacity: 0.72,
+  },
+  goalSentText: {
+    color: theme.colors.agentEventText,
+    fontSize: 14,
+  },
+  commandChip: {
+    backgroundColor: theme.colors.userMessageBackground,
+    borderColor: theme.colors.divider,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginBottom: 12,
+    maxWidth: '100%',
+    opacity: 0.65,
+  },
+  commandChipText: {
+    color: theme.colors.input.text,
+    fontSize: 13,
+    fontFamily: 'monospace',
+  },
   agentMessageContainer: {
     marginHorizontal: 16,
-    marginBottom: 12,
+    marginTop: 4,
+    marginBottom: 16,
     borderRadius: 16,
     maxWidth: '100%',
   },

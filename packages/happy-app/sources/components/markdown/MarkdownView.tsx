@@ -16,6 +16,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { MermaidRenderer } from './MermaidRenderer';
 import { t } from '@/text';
 import { isHttpMarkdownLink } from './linkUtils';
+import { openExternalUrl } from '@/utils/openExternalUrl';
 
 // Option type for callback
 export type Option = {
@@ -43,14 +44,7 @@ export const MarkdownView = React.memo((props: {
             return;
         }
 
-        if (Platform.OS === 'web') {
-            if (typeof window !== 'undefined') {
-                window.open(url, '_blank', 'noopener,noreferrer');
-            }
-            return;
-        }
-
-        void WebBrowser.openBrowserAsync(url);
+        void openExternalUrl(url);
     }, []);
 
     const handleLongPress = React.useCallback(() => {
@@ -137,23 +131,31 @@ function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: Markdow
     return <Text selectable={props.selectable} style={headerStyle}><RenderSpans spans={props.spans} baseStyle={headerStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
 }
 
-function RenderListBlock(props: { items: MarkdownSpan[][], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+const BULLETS = ['•', '◦', '▪'] as const;
+
+function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
     const listStyle = [style.text, style.list];
     return (
-        <View style={{ flexDirection: 'column', marginBottom: 8, gap: 1 }}>
+        <View style={{ flexDirection: 'column', marginBottom: 8, gap: 6 }}>
             {props.items.map((item, index) => (
-                <Text selectable={props.selectable} style={listStyle} key={index}>- <RenderSpans spans={item} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                <View key={index} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingLeft: item.depth * 16 }}>
+                    <Text selectable={false} style={[listStyle, { marginRight: 8, marginTop: 1 }]}>{BULLETS[Math.min(item.depth, BULLETS.length - 1)]}</Text>
+                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                </View>
             ))}
         </View>
     );
 }
 
-function RenderNumberedListBlock(props: { items: { number: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+function RenderNumberedListBlock(props: { items: { number: number, depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
     const listStyle = [style.text, style.list];
     return (
-        <View style={{ flexDirection: 'column', marginBottom: 8, gap: 1 }}>
+        <View style={{ flexDirection: 'column', marginBottom: 8, gap: 6 }}>
             {props.items.map((item, index) => (
-                <Text selectable={props.selectable} style={listStyle} key={index}>{item.number.toString()}. <RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                <View key={index} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingLeft: item.depth * 16 }}>
+                    <Text selectable={false} style={[listStyle, { marginRight: 8, marginTop: 1 }]}>{item.number}.</Text>
+                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                </View>
             ))}
         </View>
     );
@@ -238,6 +240,7 @@ function RenderOptionsBlock(props: {
                         <Pressable 
                             key={index} 
                             style={({ pressed }) => [
+                                style.optionPressable,
                                 style.optionItem,
                                 pressed && style.optionItemPressed
                             ]}
@@ -269,7 +272,7 @@ function RenderSpans(props: RenderSpanProps) {
                         selectable={props.selectable}
                         accessibilityRole={isExternalLink ? 'link' : undefined}
                         style={[props.baseStyle, isExternalLink && style.link, span.styles.map(s => style[s])]}
-                        {...(isExternalLink && Platform.OS === 'web' ? { onClick: () => { if (typeof window !== 'undefined') window.open(span.url!, '_blank', 'noopener,noreferrer'); } } as any : {})}
+                        {...(isExternalLink && Platform.OS === 'web' ? { onClick: () => props.onLinkPress(span.url!) } as any : {})}
                         onPress={isExternalLink && Platform.OS !== 'web'
                             ? () => props.onLinkPress(span.url!)
                             : undefined}
@@ -383,9 +386,9 @@ const style = StyleSheet.create((theme) => ({
     text: {
         ...Typography.default(),
         fontSize: 16,
-        lineHeight: 24, // Reduced from 28 to 24
+        lineHeight: 25,
         marginTop: 8,
-        marginBottom: 8,
+        marginBottom: 10,
         color: theme.colors.text,
         fontWeight: '400',
     },
@@ -394,9 +397,11 @@ const style = StyleSheet.create((theme) => ({
         fontStyle: 'italic',
     },
     bold: {
-        fontWeight: 'bold',
+        ...Typography.default('semiBold'),
+        fontWeight: '700',
     },
     semibold: {
+        ...Typography.default('semiBold'),
         fontWeight: '600',
     },
     code: {
@@ -589,17 +594,21 @@ const style = StyleSheet.create((theme) => ({
         gap: 8,
         marginVertical: 8,
     },
+    optionPressable: {
+        borderRadius: Platform.select({ web: 8, default: 18 }),
+    },
     optionItem: {
-        backgroundColor: theme.colors.surfaceHighest,
-        borderRadius: 8,
+        backgroundColor: Platform.select({ web: theme.colors.surfaceHighest, default: theme.colors.surface }),
+        borderRadius: Platform.select({ web: 8, default: 18 }),
         paddingHorizontal: 16,
-        paddingVertical: 12,
-        borderWidth: 1,
+        paddingVertical: Platform.select({ web: 12, default: 14 }),
+        borderWidth: Platform.select({ web: 1, default: StyleSheet.hairlineWidth }),
         borderColor: theme.colors.divider,
+        overflow: 'hidden',
     },
     optionItemPressed: {
-        opacity: 0.7,
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: Platform.select({ web: theme.colors.surfaceHigh, default: theme.colors.surfacePressed }),
+        opacity: Platform.select({ web: 0.7, default: 1 }),
     },
     optionText: {
         ...Typography.default(),

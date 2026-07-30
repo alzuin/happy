@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { isCuid } from '@paralleldrive/cuid2';
+import { stripLeadingTaskNotificationWrappers } from '@slopus/happy-wire';
 import { MessageMetaSchema, MessageMeta } from './typesMessageMeta';
 
 //
@@ -12,8 +13,9 @@ const usageDataSchema = z.object({
     cache_creation_input_tokens: z.number().optional(),
     cache_read_input_tokens: z.number().optional(),
     output_tokens: z.number(),
+    context_window: z.number().optional(),
     service_tier: z.string().optional(),
-});
+}).passthrough();
 
 export type UsageData = z.infer<typeof usageDataSchema>;
 
@@ -64,7 +66,10 @@ const sessionFileEventSchema = z.object({
     image: z.object({
         width: z.number(),
         height: z.number(),
-        thumbhash: z.string(),
+        // Optional — native iOS image-picker has no Canvas to compute it.
+        // FileView falls back to no blurry placeholder; the real picture
+        // is decrypted on render anyway.
+        thumbhash: z.string().optional(),
     }).optional(),
 });
 
@@ -106,6 +111,15 @@ const sessionEnvelopeSchema = z.object({
     subagent: z.string().refine((value) => isCuid(value), {
         message: 'subagent must be a cuid2 value',
     }).optional(),
+    // Underlying agent-protocol message id (Claude's `uuid` in the JSONL)
+    // — used as the rewind point for fork / duplicate. Optional for back-
+    // compat with envelopes emitted before this field was wired through.
+    claudeUuid: z.string().min(1).optional(),
+    // Codex app-server item id for precise thread rollback points.
+    codexItemId: z.string().min(1).optional(),
+    // Optional model usage from the source agent message. The reducer uses it
+    // for context meters; it is not rendered as a separate chat row.
+    usage: usageDataSchema.optional(),
     ev: sessionEventSchema,
 }).superRefine((envelope, ctx) => {
     if (envelope.ev.t === 'service' && envelope.role !== 'agent') {
@@ -519,6 +533,13 @@ export type NormalizedMessage = ({
     isSidechain: boolean,
     meta?: MessageMeta,
     usage?: UsageData,
+    /**
+     * Underlying Claude `uuid` for this message — used as the rewind point
+     * for the session fork / duplicate flow. Optional because some message
+     * sources (legacy events, server-emitted control messages) have none.
+     */
+    claudeUuid?: string,
+    codexItemId?: string,
 };
 
 function normalizeSessionEnvelope(
@@ -527,9 +548,15 @@ function normalizeSessionEnvelope(
     createdAt: number,
     meta: MessageMeta | undefined,
 ): NormalizedMessage | null {
+    const isUsageOnlyServiceEvent = envelope.role === 'agent'
+        && envelope.ev.t === 'service'
+        && envelope.ev.text.trim().length === 0
+        && !!envelope.usage;
+
     // Session protocol requires turn id on all agent-originated envelopes.
-    // Drop malformed agent events without turn to avoid attaching stray messages.
-    if (envelope.role === 'agent' && !envelope.turn) {
+    // Usage-only updates may arrive after turn-end, when the producer no longer has
+    // an active turn to attach to; they update status bars without rendering rows.
+    if (envelope.role === 'agent' && !envelope.turn && !isUsageOnlyServiceEvent) {
         return null;
     }
 
@@ -571,17 +598,25 @@ function normalizeSessionEnvelope(
             createdAt: messageCreatedAt,
             role: 'agent',
             isSidechain,
-            content: [{
-                type: 'text',
-                text: envelope.ev.text,
-                uuid: contentUUID,
-                parentUUID
-            }],
-            meta
+            content: isUsageOnlyServiceEvent
+                ? []
+                : [{
+                    type: 'text',
+                    text: envelope.ev.text,
+                    uuid: contentUUID,
+                    parentUUID
+                }],
+            meta,
+            usage: envelope.usage,
         } satisfies NormalizedMessage;
     }
 
     if (envelope.ev.t === 'text') {
+        const visibleText = stripLeadingTaskNotificationWrappers(envelope.ev.text);
+        if (visibleText !== envelope.ev.text && visibleText.trim().length === 0) {
+            return null;
+        }
+
         if (envelope.role === 'user') {
             return {
                 id: messageId,
@@ -591,9 +626,11 @@ function normalizeSessionEnvelope(
                 isSidechain: false,
                 content: {
                     type: 'text',
-                    text: envelope.ev.text
+                    text: visibleText
                 },
-                meta
+                meta,
+                claudeUuid: envelope.claudeUuid,
+                codexItemId: envelope.codexItemId,
             } satisfies NormalizedMessage;
         }
 
@@ -606,17 +643,20 @@ function normalizeSessionEnvelope(
             content: [
                 envelope.ev.thinking ? {
                     type: 'thinking',
-                    thinking: envelope.ev.text,
+                    thinking: visibleText,
                     uuid: contentUUID,
                     parentUUID
                 } : {
                     type: 'text',
-                    text: envelope.ev.text,
+                    text: visibleText,
                     uuid: contentUUID,
                     parentUUID
                 }
             ],
-            meta
+            meta,
+            claudeUuid: envelope.claudeUuid,
+            codexItemId: envelope.codexItemId,
+            usage: envelope.usage,
         } satisfies NormalizedMessage;
     }
 
@@ -636,7 +676,8 @@ function normalizeSessionEnvelope(
                 uuid: contentUUID,
                 parentUUID
             }],
-            meta
+            meta,
+            usage: envelope.usage,
         } satisfies NormalizedMessage;
     }
 
@@ -655,7 +696,8 @@ function normalizeSessionEnvelope(
                 uuid: contentUUID,
                 parentUUID
             }],
-            meta
+            meta,
+            usage: envelope.usage,
         } satisfies NormalizedMessage;
     }
 
@@ -670,29 +712,46 @@ function normalizeSessionEnvelope(
             }
             : {};
 
+        // File events carry no separate "completed" wire signal — the upload
+        // is already finished by the time the event is sent. Emit the
+        // tool-call AND a paired tool-result in the same message so the
+        // reducer's Phase 2 + Phase 3 see both halves and the tool flips
+        // straight to "completed". Without this the chat bubble shows a
+        // forever-spinning indicator next to the attachment.
         return {
             id: messageId,
             localId,
             createdAt: messageCreatedAt,
             role: 'agent',
             isSidechain,
-            content: [{
-                type: 'tool-call',
-                id: messageId,
-                name: 'file',
-                input: {
-                    ref: envelope.ev.ref,
-                    name: envelope.ev.name,
-                    size: envelope.ev.size,
-                    ...maybeImageMetadata
+            content: [
+                {
+                    type: 'tool-call',
+                    id: messageId,
+                    name: 'file',
+                    input: {
+                        ref: envelope.ev.ref,
+                        name: envelope.ev.name,
+                        size: envelope.ev.size,
+                        ...maybeImageMetadata
+                    },
+                    description: envelope.ev.image
+                        ? `Attached image: ${envelope.ev.name} (${envelope.ev.image.width}x${envelope.ev.image.height})`
+                        : `Attached file: ${envelope.ev.name}`,
+                    uuid: contentUUID,
+                    parentUUID
                 },
-                description: envelope.ev.image
-                    ? `Attached image: ${envelope.ev.name} (${envelope.ev.image.width}x${envelope.ev.image.height})`
-                    : `Attached file: ${envelope.ev.name}`,
-                uuid: contentUUID,
-                parentUUID
-            }],
-            meta
+                {
+                    type: 'tool-result',
+                    tool_use_id: messageId,
+                    content: null,
+                    is_error: false,
+                    uuid: `${contentUUID}:result`,
+                    parentUUID: contentUUID
+                }
+            ],
+            meta,
+            usage: envelope.usage,
         } satisfies NormalizedMessage;
     }
 
@@ -839,7 +898,8 @@ export function normalizeRawMessage(id: string, localId: string | null, createdA
                         content: {
                             type: 'text',
                             text: raw.content.data.message.content
-                        }
+                        },
+                        claudeUuid: raw.content.data.uuid,
                     };
                 }
 

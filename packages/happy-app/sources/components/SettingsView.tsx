@@ -1,4 +1,5 @@
-import { View, ScrollView, Pressable, Platform, Linking } from 'react-native';
+import { NativeScrollEvent, NativeSyntheticEvent, View, ScrollView, Pressable, Platform } from 'react-native';
+import { openExternalUrl } from '@/utils/openExternalUrl';
 import { Image } from 'expo-image';
 import * as React from 'react';
 import { Text } from '@/components/StyledText';
@@ -29,10 +30,67 @@ import { getDisplayName, getAvatarUrl, getBio } from '@/sync/profile';
 import { Avatar } from '@/components/Avatar';
 import { t } from '@/text';
 
-export const SettingsView = React.memo(function SettingsView() {
+type BuildConfig = {
+    buildCommitSha?: unknown;
+    buildCommitTimestamp?: unknown;
+};
+
+function getBuildConfig(): BuildConfig {
+    const appConfig = Constants.expoConfig?.extra?.app;
+    return appConfig && typeof appConfig === 'object' ? appConfig as BuildConfig : {};
+}
+
+function formatUtcTimestamp(value: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+
+    return date.toISOString()
+        .replace(/\.\d{3}Z$/, 'Z')
+        .replace(/:\d{2}Z$/, 'Z')
+        .replace('T', ' ')
+        .replace('Z', ' UTC');
+}
+
+function formatBuildSubtitle(buildConfig: BuildConfig): string | undefined {
+    const commitTimestamp = typeof buildConfig.buildCommitTimestamp === 'string'
+        ? formatUtcTimestamp(buildConfig.buildCommitTimestamp)
+        : undefined;
+    const commitSha = typeof buildConfig.buildCommitSha === 'string'
+        ? buildConfig.buildCommitSha.slice(0, 7)
+        : undefined;
+
+    if (!commitTimestamp && !commitSha) {
+        return undefined;
+    }
+
+    return [
+        commitTimestamp ? `Commit ${commitTimestamp}` : 'Commit',
+        commitSha,
+    ].filter(Boolean).join(' / ');
+}
+
+export const SettingsView = React.memo(function SettingsView({
+    topContentInset = 0,
+    bottomContentInset = 0,
+    onScroll,
+}: {
+    topContentInset?: number;
+    bottomContentInset?: number;
+    onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+}) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const appVersion = Constants.expoConfig?.version || '1.0.0';
+    const runtimeVersion = typeof Constants.expoConfig?.runtimeVersion === 'string'
+        ? Constants.expoConfig.runtimeVersion
+        : undefined;
+    const versionDetail = [
+        appVersion,
+        runtimeVersion ? `runtime ${runtimeVersion}` : undefined,
+    ].filter(Boolean).join(' / ');
+    const versionSubtitle = formatBuildSubtitle(getBuildConfig());
     const auth = useAuth();
     const [devModeEnabled, setDevModeEnabled] = useLocalSettingMutable('devModeEnabled');
     const isPro = __DEV__ || useEntitlement('pro');
@@ -58,19 +116,11 @@ export const SettingsView = React.memo(function SettingsView() {
     const { connectTerminal, connectWithUrl, isLoading } = useConnectTerminal();
 
     const handleGitHub = async () => {
-        const url = 'https://github.com/slopus/happy';
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-            await Linking.openURL(url);
-        }
+        await openExternalUrl('https://github.com/slopus/happy');
     };
 
     const handleReportIssue = async () => {
-        const url = 'https://github.com/slopus/happy/issues';
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-            await Linking.openURL(url);
-        }
+        await openExternalUrl('https://github.com/slopus/happy/issues');
     };
 
     const handleSubscribe = async () => {
@@ -104,7 +154,7 @@ export const SettingsView = React.memo(function SettingsView() {
     // GitHub connection
     const [connectingGitHub, connectGitHub] = useHappyAction(async () => {
         const params = await getGitHubOAuthParams(auth.credentials!);
-        await Linking.openURL(params.url);
+        await openExternalUrl(params.url);
     });
 
     // GitHub disconnection
@@ -140,10 +190,25 @@ export const SettingsView = React.memo(function SettingsView() {
 
     return (
 
-        <ItemList style={{ paddingTop: 0 }}>
+        <ItemList
+            style={{ paddingTop: 0 }}
+            containerStyle={{ paddingTop: topContentInset, paddingBottom: bottomContentInset }}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+        >
             {/* App Info Header */}
             <View style={{ maxWidth: layout.maxWidth, alignSelf: 'center', width: '100%' }}>
-                <View style={{ alignItems: 'center', paddingVertical: 24, backgroundColor: theme.colors.surface, marginTop: 16, borderRadius: 12, marginHorizontal: 16 }}>
+                <View
+                    style={{
+                    alignItems: 'center',
+                    paddingVertical: 24,
+                    backgroundColor: theme.colors.surface,
+                    marginTop: 16,
+                    borderRadius: Platform.select({ web: 12, default: 16 }),
+                    marginHorizontal: 16,
+                    borderWidth: Platform.OS === 'web' ? 0 : 0.5,
+                    borderColor: theme.colors.divider,
+                }}>
                     {profile.firstName ? (
                         // Profile view: Avatar + name + version
                         <>
@@ -341,6 +406,12 @@ export const SettingsView = React.memo(function SettingsView() {
                     onPress={() => router.push('/settings/voice')}
                 />
                 <Item
+                    title="Agent Defaults"
+                    subtitle="Default model, effort, and permissions"
+                    icon={<Ionicons name="options-outline" size={29} color="#5AC8FA" />}
+                    onPress={() => router.push('/settings/agents' as any)}
+                />
+                <Item
                     title={t('settings.featuresTitle')}
                     subtitle={t('settings.featuresSubtitle')}
                     icon={<Ionicons name="flask-outline" size={29} color="#FF9500" />}
@@ -392,41 +463,25 @@ export const SettingsView = React.memo(function SettingsView() {
                 <Item
                     title={t('settings.privacyPolicy')}
                     icon={<Ionicons name="shield-checkmark-outline" size={29} color="#007AFF" />}
-                    onPress={async () => {
-                        const url = 'https://happy.engineering/privacy/';
-                        const supported = await Linking.canOpenURL(url);
-                        if (supported) {
-                            await Linking.openURL(url);
-                        }
-                    }}
+                    onPress={() => openExternalUrl('https://happy.engineering/privacy/')}
                 />
                 <Item
                     title={t('settings.termsOfService')}
                     icon={<Ionicons name="document-text-outline" size={29} color="#007AFF" />}
-                    onPress={async () => {
-                        const url = 'https://github.com/slopus/happy/blob/main/TERMS.md';
-                        const supported = await Linking.canOpenURL(url);
-                        if (supported) {
-                            await Linking.openURL(url);
-                        }
-                    }}
+                    onPress={() => openExternalUrl('https://github.com/slopus/happy/blob/main/TERMS.md')}
                 />
                 {Platform.OS === 'ios' && (
                     <Item
                         title={t('settings.eula')}
                         icon={<Ionicons name="document-text-outline" size={29} color="#007AFF" />}
-                        onPress={async () => {
-                            const url = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
-                            const supported = await Linking.canOpenURL(url);
-                            if (supported) {
-                                await Linking.openURL(url);
-                            }
-                        }}
+                        onPress={() => openExternalUrl('https://www.apple.com/legal/internet-services/itunes/dev/stdeula/')}
                     />
                 )}
                 <Item
                     title={t('common.version')}
-                    detail={appVersion}
+                    subtitle={versionSubtitle}
+                    subtitleLines={2}
+                    detail={versionDetail}
                     icon={<Ionicons name="information-circle-outline" size={29} color={theme.colors.textSecondary} />}
                     onPress={handleVersionClick}
                     showChevron={false}

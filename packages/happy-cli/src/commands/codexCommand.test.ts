@@ -57,6 +57,9 @@ describe('handleCodexCommand', () => {
       startedBy: 'terminal',
       noSandbox: false,
       resumeThreadId: undefined,
+      permissionMode: undefined,
+      model: undefined,
+      effort: undefined,
     })
     expect(
       mocks.mockEnsureDaemonRunning.mock.invocationCallOrder[0],
@@ -80,6 +83,51 @@ describe('handleCodexCommand', () => {
       startedBy: 'daemon',
       noSandbox: true,
       resumeThreadId: 'thread-123',
+      permissionMode: undefined,
+      model: undefined,
+      effort: undefined,
+    })
+  })
+
+  it('passes permission-mode through to runCodex', async () => {
+    await handleCodexCommand(['--permission-mode', 'yolo'])
+
+    expect(mocks.mockRunCodex).toHaveBeenCalledWith({
+      credentials: { token: 'token' },
+      startedBy: undefined,
+      noSandbox: false,
+      resumeThreadId: undefined,
+      permissionMode: 'yolo',
+      model: undefined,
+      effort: undefined,
+    })
+  })
+
+  it('maps --yolo to codex yolo permission mode', async () => {
+    await handleCodexCommand(['--yolo'])
+
+    expect(mocks.mockRunCodex).toHaveBeenCalledWith({
+      credentials: { token: 'token' },
+      startedBy: undefined,
+      noSandbox: false,
+      resumeThreadId: undefined,
+      permissionMode: 'yolo',
+      model: undefined,
+      effort: undefined,
+    })
+  })
+
+  it('passes model and effort through to runCodex', async () => {
+    await handleCodexCommand(['--model', 'gpt-5.4', '--effort', 'xhigh'])
+
+    expect(mocks.mockRunCodex).toHaveBeenCalledWith({
+      credentials: { token: 'token' },
+      startedBy: undefined,
+      noSandbox: false,
+      resumeThreadId: undefined,
+      permissionMode: undefined,
+      model: 'gpt-5.4',
+      effort: 'xhigh',
     })
   })
 })

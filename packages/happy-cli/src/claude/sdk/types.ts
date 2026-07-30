@@ -20,6 +20,7 @@ export { AbortError } from '@anthropic-ai/claude-agent-sdk'
 // Alias for backward compatibility
 import type { CanUseTool } from '@anthropic-ai/claude-agent-sdk'
 export type CanCallToolCallback = CanUseTool
+export type CanCallToolOptions = Parameters<CanUseTool>[2]
 
 /**
  * Adapter type for query options.
@@ -44,6 +45,14 @@ export interface QueryOptions {
     canCallTool?: CanCallToolCallback
     /** Path to a settings JSON file to pass to Claude via --settings */
     settingsPath?: string
+    /**
+     * Effort level passed straight through to the Claude Agent SDK option
+     * of the same name — controls how much thinking/reasoning Claude
+     * applies on each turn ('low' | 'medium' | 'high' | 'xhigh' | 'max').
+     * 'xhigh' is supported on the newest Opus generation (e.g. Opus 4.8);
+     * the SDK silently downgrades it to 'high' on models without it.
+     */
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
 /**

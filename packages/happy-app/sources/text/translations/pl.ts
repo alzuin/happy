@@ -94,12 +94,14 @@ export const pl: TranslationStructure = {
         permissionRequired: 'wymagane uprawnienie',
         activeNow: 'Aktywny teraz',
         unknown: 'nieznane',
+        unread: 'nowe wyniki',
     },
 
     time: {
         justNow: 'teraz',
         minutesAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'minuta', few: 'minuty', many: 'minut' })} temu`,
         hoursAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'godzina', few: 'godziny', many: 'godzin' })} temu`,
+        daysAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'dzień', few: 'dni', many: 'dni' })} temu`,
     },
 
     connect: {
@@ -176,6 +178,27 @@ export const pl: TranslationStructure = {
             light: 'Zawsze używaj jasnego motywu',
             dark: 'Zawsze używaj ciemnego motywu',
         },
+        chat: 'Czat',
+        chatDescription: 'Dostosuj wygląd wiadomości czatu',
+        sessionStatusBar: 'Informacje o stanie sesji',
+        sessionStatusBarDescription: 'Wybierz, gdzie wyświetlać gałąź, model, wysiłek i kontekst',
+        sessionStatusDisplayOptions: {
+            hidden: 'Ukryte',
+            above: 'Nad polem wprowadzania',
+            below: 'Pod polem wprowadzania',
+        },
+        usageLimitShowRemaining: 'Pokaż pozostały limit',
+        usageLimitShowRemainingDescription: 'Wskaźniki limitu odliczają w dół zamiast w górę',
+        userMessageBubbleColor: 'Kolor Twoich wiadomości',
+        userMessageBubbleColorDescription: 'Ułatw znajdowanie swoich wiadomości w długich czatach',
+        userMessageBubbleColorOptions: {
+            blue: 'Niebieski',
+            green: 'Zielony',
+            purple: 'Fioletowy',
+            rose: 'Różowy',
+            sand: 'Piaskowy',
+            gray: 'Szary',
+        },
         display: 'Wyświetlanie',
         displayDescription: 'Kontroluj układ i odstępy',
         inlineToolCalls: 'Wbudowane wywołania narzędzi',
@@ -226,11 +249,15 @@ export const pl: TranslationStructure = {
         markdownCopyV2Subtitle: 'Długie naciśnięcie otwiera modal kopiowania',
         hideInactiveSessions: 'Ukryj nieaktywne sesje',
         hideInactiveSessionsSubtitle: 'Wyświetlaj tylko aktywne czaty na liście',
+        groupToolCalls: 'Grupuj wywołania narzędzi',
+        groupToolCallsSubtitle: 'Zwijaj kolejne wywołania narzędzi w jeden kontener',
         privacy: 'Prywatność',
         privacyDescription: 'Całkowicie wyłącza wszystkie analizy i telemetrię. Żadne dane nie będą wysyłane do PostHog ani żadnego innego serwisu śledzącego.',
         disableAnalytics: 'Wyłącz analitykę',
         analyticsDisabled: 'Wszystkie śledzenie i telemetria wyłączone',
         analyticsEnabled: 'Anonimowa analityka użytkowania aktywna',
+        imageUpload: 'Przesyłanie obrazów',
+        imageUploadSubtitle: 'Dołączaj obrazy do wiadomości, aby obsługiwani agenci mogli je analizować',
     },
 
     errors: {
@@ -303,6 +330,26 @@ export const pl: TranslationStructure = {
         inputPlaceholder: 'Wpisz wiadomość...',
         inactiveArchived: 'Ta sesja jest nieaktywna.',
         resumeFromTerminal: 'Aby wznowić ją z terminala:',
+        newChat: 'Nowy czat',
+        statusBarContext: 'Kontekst',
+        statusBarPathTitle: 'Katalog roboczy',
+        forkAction: 'Rozwidl sesję',
+        forkSubtitle: 'Kontynuuj w nowej sesji z tym samym kontekstem',
+        duplicateAction: 'Duplikuj od wiadomości…',
+        duplicateSubtitle: 'Cofnij się do wybranego punktu i spróbuj inaczej',
+        forkFromHere: 'Rozwidl od tego miejsca',
+        duplicateSheetTitle: 'Wybierz punkt cofnięcia',
+        duplicateSheetSubtitle: 'Nowa sesja zachowa wybraną turę w całości (twoja wiadomość i odpowiedź agenta) i odrzuci wszystkie kolejne wiadomości.',
+        duplicateSheetConfirm: 'Duplikuj',
+        duplicateSheetEmpty: 'W tej sesji nie ma jeszcze wiadomości, do których można się cofnąć.',
+        duplicateRowDisabled: 'Tej wiadomości nie można użyć jako punktu cofnięcia.',
+        forkedFromLabel: 'Rozwidlone z',
+        forkedFromSubtitle: 'Otwórz sesję, z której powstało rozwidlenie',
+        forkErrorOffline: 'Maszyna jest offline. Rozwidlenie jest dostępne tylko gdy maszyna sesji jest online.',
+        forkErrorMissingUuid: 'Wybrany punkt cofnięcia nie istnieje już w sesji źródłowej — spróbuj rozwidlić bez przycinania.',
+        forkErrorMissingMetadata: 'Brak metadanych sesji wymaganych do rozwidlenia.',
+        forkErrorGeneric: 'Nie udało się rozwidlić sesji.',
+        forkClaudeOnly: 'Rozwidlenie jest obecnie obsługiwane tylko dla sesji Claude.',
     },
 
     commandPalette: {
@@ -403,6 +450,21 @@ export const pl: TranslationStructure = {
             scanQrCode: 'Zeskanuj kod QR',
             openCamera: 'Otwórz kamerę',
         },
+        agentGoalBar: {
+            currentGoal: 'Bieżący cel',
+            accessibilityLabel: ({ goal }: { goal: string }) => `Bieżący cel: ${goal}`,
+            clearGoal: 'Wyczyść cel',
+            stopGoal: 'Zatrzymaj cel',
+            editGoal: 'Edytuj cel',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Kontekst ${used} z ${total} tokenów, ${percent}%`,
+            limitFiveHour: 'Limit 5-godzinny',
+            limitSevenDay: 'Limit 7-dniowy',
+            limitResets: ({ time }: { time: string }) => `reset ${time}`,
+            limitAsOf: ({ age }: { age: string }) => `sprzed ${age}`,
+            limitRemaining: ({ percent }: { percent: number }) => `pozostało ${percent}%`,
+        },
     },
 
     agentInput: {
@@ -436,6 +498,10 @@ export const pl: TranslationStructure = {
             readOnly: 'Read Only Mode',
             safeYolo: 'Safe YOLO',
             yolo: 'YOLO',
+            defaultDescription: 'pytaj przed niezaufanymi poleceniami',
+            readOnlyDescription: 'bez zapisu',
+            safeYoloDescription: 'bez pytań, piaskownica obszaru roboczego',
+            yoloDescription: 'bez pytań, pełny dostęp',
             badgeReadOnly: 'Read Only Mode',
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
@@ -481,11 +547,28 @@ export const pl: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: 'Pokaż zarchiwizowane',
         hideArchived: 'Ukryj zarchiwizowane',
+        newSession: 'Nowa sesja',
+    },
+
+    zen: {
+        toggle: 'Tryb zen',
     },
 
     toolView: {
         input: 'Wejście',
         output: 'Wyjście',
+    },
+
+    toolGroup: {
+        editedFile: 'Edited file',
+        editedFiles: ({ count }: { count: number }) => `${plural({ count, one: 'Edytowano 1 plik', few: `Edytowano ${count} pliki`, many: `Edytowano ${count} plików` })}`,
+        readFiles: ({ count }: { count: number }) => `${plural({ count, one: 'Odczytano 1 plik', few: `Odczytano ${count} pliki`, many: `Odczytano ${count} plików` })}`,
+        ranCommands: ({ count }: { count: number }) => `${plural({ count, one: 'Wykonano 1 polecenie', few: `Wykonano ${count} polecenia`, many: `Wykonano ${count} poleceń` })}`,
+        searched: ({ count }: { count: number }) => `${plural({ count, one: 'Wyszukano 1 raz', few: `Wyszukano ${count} razy`, many: `Wyszukano ${count} razy` })}`,
+        fetchedUrls: ({ count }: { count: number }) => `${plural({ count, one: 'Pobrano 1 URL', few: `Pobrano ${count} URLe`, many: `Pobrano ${count} URLi` })}`,
+        ranTasks: ({ count }: { count: number }) => `${plural({ count, one: 'Wykonano 1 zadanie', few: `Wykonano ${count} zadania`, many: `Wykonano ${count} zadań` })}`,
+        usedTools: ({ count }: { count: number }) => `${plural({ count, one: 'Użyto 1 narzędzie', few: `Użyto ${count} narzędzia`, many: `Użyto ${count} narzędzi` })}`,
+        workedFor: ({ duration }: { duration: string }) => `Worked ${duration}`,
     },
 
     tools: {
@@ -580,6 +663,31 @@ export const pl: TranslationStructure = {
         noChangesTitle: 'Brak zmian',
         noChangesSubtitle: 'Drzewo robocze jest czyste',
         deleted: 'Usunięty',
+        changedFiles: ({ count }: { count: number }) => `${count} ${count === 1 ? 'zmieniony plik' : 'zmienionych plików'}`,
+        allFiles: 'Wszystkie pliki',
+        addPanel: 'Dodaj panel',
+        closePanel: 'Zamknij panel',
+        editFile: 'Edytuj',
+        saveFile: 'Zapisz',
+        failedToRead: 'Nie udało się odczytać pliku',
+        failedToSave: 'Nie udało się zapisać pliku',
+        fileConflict: 'Konflikt pliku',
+        fileConflictDescription: 'Ten plik został zmodyfikowany na urządzeniu podczas edycji. Załaduj ponownie aby zobaczyć najnowszą wersję.',
+        reload: 'Załaduj ponownie',
+        overwrite: 'Nadpisz',
+    },
+    sideChat: {
+        panelTitle: 'Czat boczny',
+        emptyTitle: 'Rozpocznij czat boczny',
+        emptySubtitle: 'Zapytaj agenta o coś na boku. Dziedziczy kontekst tego czatu, ale pozostaje odizolowany — nic tutaj nie wpływa na główną rozmowę.',
+        startButton: 'Rozpocznij czat boczny',
+        creating: 'Uruchamianie czatu bocznego…',
+        unavailable: 'Ta sesja nie może jeszcze rozpocząć czatu bocznego — poczekaj, aż agent będzie online.',
+        composerPlaceholder: 'Napisz na czacie bocznym…',
+        expand: 'Otwórz na pełnym ekranie',
+        tabLabel: ({ index }: { index: number }) => `Czat boczny ${index}`,
+        newChat: 'Nowy czat boczny',
+        close: 'Zamknij czat boczny',
     },
 
     settingsVoice: {
@@ -802,6 +910,7 @@ export const pl: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `Przełączono na tryb ${mode}`,
         unknownEvent: 'Nieznane zdarzenie',
         usageLimitUntil: ({ time }: { time: string }) => `Osiągnięto limit użycia do ${time}`,
+        sentAsGoal: 'Sent as goal',
         unknownTime: 'nieznany czas',
     },
 
@@ -945,6 +1054,21 @@ export const pl: TranslationStructure = {
         usageOverTime: 'Użycie w czasie',
         byModel: 'Według modelu',
         noData: 'Brak danych o użyciu',
+    },
+
+    imageUpload: {
+        permissionTitle: 'Dostęp do biblioteki zdjęć',
+        permissionMessage: 'Zezwól na dostęp do biblioteki zdjęć, aby załączać obrazy do wiadomości.',
+        limitTitle: 'Osiągnięto limit obrazów',
+        limitMessage: ({ max }: { max: number }) => `Możesz dołączyć maksymalnie ${max} obrazów na wiadomość.`,
+        fileTooLargeTitle: 'Plik zbyt duży',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}" przekracza limit ${maxMb}MB i nie został dodany.`,
+        uploadFailedTitle: 'Przesyłanie nieudane',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? 'Nie udało się przesłać jednego zdjęcia i nie zostało wysłane.'
+            : `Nie udało się przesłać ${count} zdjęć i nie zostały wysłane.`,
+        notSupportedTitle: 'Obrazy nieobsługiwane',
+        notSupportedMessage: 'Ten agent nie obsługuje załączników obrazów. Obrazy nie zostały wysłane.',
     },
 
     feed: {

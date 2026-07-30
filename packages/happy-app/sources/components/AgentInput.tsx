@@ -1,7 +1,10 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
-import { View, Platform, useWindowDimensions, ViewStyle, Text, ActivityIndicator, TouchableWithoutFeedback, Image as RNImage, Pressable } from 'react-native';
+import { Keyboard, View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback } from 'react-native';
 import { Image } from 'expo-image';
+import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
+import type { AttachmentPreview } from '@/sync/attachmentTypes';
+import { generateThumbhash } from '@/utils/thumbhash';
 import { layout } from './layout';
 import { MultiTextInput, KeyPressEvent } from './MultiTextInput';
 import { Typography } from '@/constants/Typography';
@@ -14,6 +17,7 @@ import { useActiveWord } from './autocomplete/useActiveWord';
 import { useActiveSuggestions } from './autocomplete/useActiveSuggestions';
 import { AgentInputAutocomplete } from './AgentInputAutocomplete';
 import { FloatingOverlay } from './FloatingOverlay';
+import { SessionStatusBar } from './SessionStatusBar';
 import { TextInputState, MultiTextInputHandle } from './MultiTextInput';
 import { applySuggestion } from './autocomplete/applySuggestion';
 import { GitStatusBadge, useHasMeaningfulGitStatus } from './GitStatusBadge';
@@ -23,11 +27,24 @@ import { hackMode, hackModes } from '@/sync/modeHacks';
 import { Theme } from '@/theme';
 import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
+import { isRunningOnMac } from '@/utils/platform';
+import { MobileGlassSurface } from './MobileGlass';
+import { AnimatedClickAwayBackdrop } from './AnimatedOverlay';
+import { BubblePressable } from './BubblePressable';
+import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
+import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
+import { ProviderIcon } from './ProviderIcon';
+import { isRigMetadata } from '@/sync/rig';
 
 interface AgentInputProps {
-    value: string;
+    // `initialValue` seeds the uncontrolled textarea once; keystrokes never
+    // round-trip back into it via React, which is what keeps fast typing/
+    // deletion crisp. The parent reads the live text via the imperative ref.
+    initialValue: string;
     placeholder: string;
-    onChangeText: (text: string) => void;
+    // Fires on every keystroke so the parent can sync derived state (drafts,
+    // hasText) — typically wrapped in startTransition / debounce by the caller.
+    onChangeText?: (text: string) => void;
     sessionId?: string;
     onSend: () => void;
     sendIcon?: React.ReactNode;
@@ -64,10 +81,17 @@ interface AgentInputProps {
         cacheCreation: number;
         cacheRead: number;
         contextSize: number;
+        contextWindow?: number;
     };
     alwaysShowContextSize?: boolean;
+    showSessionStatusInfoInSettings?: boolean;
+    /** Hide the auxiliary connection/mode row while reading older messages. */
+    showStatusDetails?: boolean;
+    sessionStatusGitBranch?: string | null;
+    sessionStatusModelLabel?: string | null;
+    sessionStatusEffortLabel?: string | null;
     onFileViewerPress?: () => void;
-    agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw';
+    agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
     onAgentClick?: () => void;
     machineName?: string | null;
     onMachineClick?: () => void;
@@ -77,9 +101,29 @@ interface AgentInputProps {
     isSendDisabled?: boolean;
     isSending?: boolean;
     minHeight?: number;
+    zenMode?: boolean;
+    /** Image attachments waiting to be sent (expImageUpload feature). */
+    selectedImages?: AttachmentPreview[];
+    onPickImages?: () => void;
+    onRemoveImage?: (id: string) => void;
+    onAddImages?: (images: AttachmentPreview[]) => void;
 }
 
-const MAX_CONTEXT_SIZE = 190000;
+function permissionKindIcon(kind: string | null | undefined): React.ComponentProps<typeof Ionicons>['name'] {
+    if (kind === 'read-only') return 'lock-closed-outline';
+    if (kind === 'safe-yolo') return 'shield-checkmark-outline';
+    if (kind === 'yolo') return 'warning-outline';
+    return 'folder-open-outline';
+}
+
+// The composer text/caret must line up with the visible leading edge of the
+// add glyph, rather than the larger 42pt touch target around it. Keeping the
+// geometry in one place prevents the two rows from drifting apart.
+const MOBILE_COMPOSER_SHELL_INSET = 10;
+const MOBILE_COMPOSER_ACTION_SIZE = 42;
+const MOBILE_COMPOSER_ADD_ICON_SIZE = 26;
+const MOBILE_COMPOSER_TEXT_INSET = MOBILE_COMPOSER_SHELL_INSET
+    + (MOBILE_COMPOSER_ACTION_SIZE - MOBILE_COMPOSER_ADD_ICON_SIZE) / 2;
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
@@ -99,14 +143,51 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingBottom: 8,
         paddingHorizontal: 8,
     },
+    unifiedPanelShadow: {
+        borderRadius: 24,
+        shadowColor: theme.colors.shadow.color,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.22,
+        shadowRadius: 16,
+        elevation: 4,
+    },
+    mobileUnifiedPanel: {
+        // The frosted material is supplied by MobileGlassSurface. The dense
+        // tint keeps the transcript illegible behind it without losing glass.
+        backgroundColor: Platform.select({
+            ios: 'transparent',
+            android: theme.colors.glass.backgroundStrong,
+            default: theme.colors.input.background,
+        }),
+        borderRadius: 30,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: theme.colors.glass.border,
+        paddingHorizontal: MOBILE_COMPOSER_SHELL_INSET,
+        paddingTop: 8,
+        paddingBottom: 8,
+    },
+    mobileUnifiedPanelShadow: {
+        borderRadius: 30,
+    },
     inputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 0,
-        paddingLeft: 8,
+        paddingLeft: 2,
         paddingRight: 8,
         paddingVertical: 4,
         minHeight: 40,
+    },
+    mobileInputContainer: {
+        alignItems: 'center',
+        // Keep a one-line composer compact while centering its caret between
+        // the shell and the action row. The previous 60pt slot left a full
+        // blank line below an empty input on phones.
+        minHeight: 44,
+        // 18pt from the outer edge: 10pt shell inset plus the 8pt offset to
+        // the visible edge of the 26pt add glyph inside its 42pt target.
+        paddingHorizontal: MOBILE_COMPOSER_TEXT_INSET - MOBILE_COMPOSER_SHELL_INSET,
+        paddingVertical: 4,
     },
 
     // Overlay styles
@@ -123,7 +204,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         bottom: '100%',
         left: 0,
         right: 0,
-        marginBottom: 8,
+        marginBottom: 12,
         zIndex: 1000,
     },
     overlayBackdrop: {
@@ -137,6 +218,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     overlaySection: {
         paddingVertical: 8,
     },
+    settingsStatusInfo: {
+        paddingTop: 6,
+        paddingBottom: 4,
+        paddingHorizontal: 8,
+    },
     overlaySectionTitle: {
         fontSize: 12,
         fontWeight: '600',
@@ -147,7 +233,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     overlayDivider: {
         height: 1,
-        backgroundColor: theme.colors.divider,
+        backgroundColor: theme.colors.glass.divider,
         marginHorizontal: 16,
     },
 
@@ -231,6 +317,56 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'space-between',
         paddingHorizontal: 0,
     },
+    mobileActionButtonsContainer: {
+        height: MOBILE_COMPOSER_ACTION_SIZE,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+    },
+    mobileIconButton: {
+        width: MOBILE_COMPOSER_ACTION_SIZE,
+        height: MOBILE_COMPOSER_ACTION_SIZE,
+        borderRadius: MOBILE_COMPOSER_ACTION_SIZE / 2,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+    },
+    mobileModeButton: {
+        flex: 1,
+        minWidth: 0,
+        height: 40,
+        borderRadius: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        paddingHorizontal: 8,
+        paddingRight: 0,
+        gap: 7,
+    },
+    mobileEffortButton: {
+        width: 64,
+        flexShrink: 0,
+        height: 40,
+        borderRadius: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        paddingLeft: 2,
+        paddingRight: 0,
+        gap: 4,
+    },
+    mobileModeText: {
+        flexShrink: 1,
+        minWidth: 0,
+        fontSize: 14,
+        color: theme.colors.text,
+        ...Typography.default(),
+    },
+    mobileModeSeparator: {
+        color: theme.colors.textSecondary,
+        fontSize: 14,
+        ...Typography.default(),
+    },
     actionButtonsLeft: {
         flexDirection: 'row',
         gap: 8,
@@ -261,6 +397,21 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexShrink: 0,
         marginLeft: 8,
     },
+    mobilePrimaryButton: {
+        width: MOBILE_COMPOSER_ACTION_SIZE,
+        height: MOBILE_COMPOSER_ACTION_SIZE,
+        borderRadius: MOBILE_COMPOSER_ACTION_SIZE / 2,
+        marginLeft: 1,
+    },
+    mobilePrimaryButtonActive: {
+        backgroundColor: theme.colors.surfaceHighest,
+    },
+    mobilePrimaryButtonInactive: {
+        backgroundColor: theme.dark ? '#3A3A3C' : '#D1D1D6',
+    },
+    mobileStopButton: {
+        backgroundColor: theme.dark ? '#F5F5F5' : theme.colors.button.primary.background,
+    },
     sendButtonActive: {
         backgroundColor: theme.colors.button.primary.background,
     },
@@ -286,8 +437,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
 }));
 
-const getContextWarning = (contextSize: number, alwaysShow: boolean = false, theme: Theme) => {
-    const percentageUsed = (contextSize / MAX_CONTEXT_SIZE) * 100;
+const getContextWarning = (contextSize: number, alwaysShow: boolean = false, theme: Theme, contextWindow?: number) => {
+    // Until the session reports its window there is no honest denominator, so
+    // nothing is shown rather than dividing by a guess — a percentage that
+    // later corrects itself upward reads as the context refilling.
+    if (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+        return null;
+    }
+    const maxContextSize = contextWindow;
+    const percentageUsed = (contextSize / maxContextSize) * 100;
     const percentageRemaining = Math.max(0, Math.min(100, 100 - percentageUsed));
 
     if (percentageRemaining <= 5) {
@@ -301,20 +459,259 @@ const getContextWarning = (contextSize: number, alwaysShow: boolean = false, the
     return null; // No display needed
 };
 
+// Stable sub-trees extracted from AgentInput so they don't reconcile when
+// the input's keystroke-derived state (hasText / inputState) flips. Their
+// props are derived from session metadata, not from the textarea content,
+// so memo skips re-render on typing entirely.
+
+type StatusRowProps = {
+    connectionStatus?: AgentInputProps['connectionStatus'];
+    contextWarning: { text: string; color: string } | null;
+    displayPermissionMode: ReturnType<typeof hackMode> | null;
+    permissionModeKey: string;
+    permissionSemanticKind?: string | null;
+    isSandboxedYoloMode: boolean;
+    permissionLabel: string | null;
+    zenMode?: boolean;
+};
+
+const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
+    const { theme } = useUnistyles();
+    const showPermissionBadge = !!p.displayPermissionMode
+        && p.permissionModeKey !== 'default'
+        && !p.zenMode
+        && !!p.permissionLabel;
+    if (!p.connectionStatus && !p.contextWarning && !showPermissionBadge) {
+        return null;
+    }
+    return (
+        <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 16,
+            paddingBottom: 4,
+            minHeight: 20,
+        }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 }}>
+                {p.connectionStatus && (
+                    <>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <StatusDot
+                                color={p.connectionStatus.dotColor}
+                                isPulsing={p.connectionStatus.isPulsing}
+                                size={6}
+                            />
+                            <Text style={{
+                                fontSize: 11,
+                                color: p.connectionStatus.color,
+                                ...Typography.default()
+                            }}>
+                                {p.connectionStatus.text}
+                            </Text>
+                        </View>
+                        {p.connectionStatus.cliStatus && (
+                            <>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                    <Text style={{
+                                        fontSize: 11,
+                                        color: p.connectionStatus.cliStatus.claude ? theme.colors.success : theme.colors.textDestructive,
+                                        ...Typography.default()
+                                    }}>
+                                        {p.connectionStatus.cliStatus.claude ? '✓' : '✗'}
+                                    </Text>
+                                    <Text style={{
+                                        fontSize: 11,
+                                        color: p.connectionStatus.cliStatus.claude ? theme.colors.success : theme.colors.textDestructive,
+                                        ...Typography.default()
+                                    }}>
+                                        claude
+                                    </Text>
+                                </View>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                    <Text style={{
+                                        fontSize: 11,
+                                        color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
+                                        ...Typography.default()
+                                    }}>
+                                        {p.connectionStatus.cliStatus.codex ? '✓' : '✗'}
+                                    </Text>
+                                    <Text style={{
+                                        fontSize: 11,
+                                        color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
+                                        ...Typography.default()
+                                    }}>
+                                        codex
+                                    </Text>
+                                </View>
+                                {p.connectionStatus.cliStatus.gemini !== undefined && (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: p.connectionStatus.cliStatus.gemini ? theme.colors.success : theme.colors.textDestructive,
+                                            ...Typography.default()
+                                        }}>
+                                            {p.connectionStatus.cliStatus.gemini ? '✓' : '✗'}
+                                        </Text>
+                                        <Text style={{
+                                            fontSize: 11,
+                                            color: p.connectionStatus.cliStatus.gemini ? theme.colors.success : theme.colors.textDestructive,
+                                            ...Typography.default()
+                                        }}>
+                                            gemini
+                                        </Text>
+                                    </View>
+                                )}
+                            </>
+                        )}
+                    </>
+                )}
+                {p.contextWarning && (
+                    <Text style={{
+                        fontSize: 11,
+                        color: p.contextWarning.color,
+                        marginLeft: p.connectionStatus ? 8 : 0,
+                        ...Typography.default()
+                    }}>
+                        {p.connectionStatus ? '• ' : ''}{p.contextWarning.text}
+                    </Text>
+                )}
+            </View>
+            {showPermissionBadge && (() => {
+                const presentationKind = p.permissionSemanticKind ?? p.permissionModeKey;
+                const permColor = p.isSandboxedYoloMode ? '#4169E1' :
+                    presentationKind === 'acceptEdits' ? theme.colors.permission.acceptEdits :
+                        presentationKind === 'bypassPermissions' ? theme.colors.permission.bypass :
+                            presentationKind === 'plan' ? theme.colors.permission.plan :
+                                presentationKind === 'read-only' ? theme.colors.permission.readOnly :
+                                    presentationKind === 'safe-yolo' ? theme.colors.permission.safeYolo :
+                                        presentationKind === 'yolo' ? theme.colors.permission.yolo :
+                                            theme.colors.textSecondary;
+                const permIcon: 'play-forward' | 'pause' =
+                    presentationKind === 'plan' || presentationKind === 'read-only'
+                        ? 'pause' : 'play-forward';
+                return (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Ionicons name={permIcon} size={11} color={permColor} />
+                        <Text style={{
+                            fontSize: 11,
+                            color: permColor,
+                            ...Typography.default()
+                        }}>
+                            {p.permissionLabel}
+                        </Text>
+                    </View>
+                );
+            })()}
+        </View>
+    );
+});
+
+type ContextChipsProps = {
+    machineName?: string | null;
+    onMachineClick?: () => void;
+    currentPath?: string | null;
+    onPathClick?: () => void;
+};
+
+const AgentInputContextChips = React.memo(function AgentInputContextChips(p: ContextChipsProps) {
+    const { theme } = useUnistyles();
+    if (p.machineName === undefined && !p.currentPath) {
+        return null;
+    }
+    return (
+        <View style={{
+            backgroundColor: theme.colors.surfacePressed,
+            borderRadius: 12,
+            padding: 8,
+            marginBottom: 8,
+            gap: 4,
+        }}>
+            {p.machineName !== undefined && p.onMachineClick && (
+                <BubblePressable
+                    onPress={() => {
+                        hapticsLight();
+                        p.onMachineClick?.();
+                    }}
+                    hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                    style={(s) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        borderRadius: Platform.select({ default: 16, android: 20 }),
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        height: 32,
+                        opacity: s.pressed ? 0.7 : 1,
+                        gap: 6,
+                    })}
+                >
+                    <Ionicons name="desktop-outline" size={14} color={theme.colors.textSecondary} />
+                    <Text style={{
+                        fontSize: 13,
+                        color: theme.colors.text,
+                        fontWeight: '600',
+                        ...Typography.default('semiBold'),
+                    }}>
+                        {p.machineName === null ? t('agentInput.noMachinesAvailable') : p.machineName}
+                    </Text>
+                </BubblePressable>
+            )}
+            {p.currentPath && p.onPathClick && (
+                <BubblePressable
+                    onPress={() => {
+                        hapticsLight();
+                        p.onPathClick?.();
+                    }}
+                    hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                    style={(s) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        borderRadius: Platform.select({ default: 16, android: 20 }),
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        height: 32,
+                        opacity: s.pressed ? 0.7 : 1,
+                        gap: 6,
+                    })}
+                >
+                    <Ionicons name="folder-outline" size={14} color={theme.colors.textSecondary} />
+                    <Text style={{
+                        fontSize: 13,
+                        color: theme.colors.text,
+                        fontWeight: '600',
+                        ...Typography.default('semiBold'),
+                    }}>
+                        {p.currentPath}
+                    </Text>
+                </BubblePressable>
+            )}
+        </View>
+    );
+});
+
 export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, AgentInputProps>((props, ref) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const screenWidth = useWindowDimensions().width;
+    // The compact action row is deliberately limited to the narrow native
+    // layout. Desktop web, Mac Catalyst, and tablet-width canvases retain the
+    // existing composer affordances rather than inheriting it.
+    const compactMobileComposer = Platform.OS !== 'web' && !isRunningOnMac() && screenWidth <= 700;
+    const useNativeSettingsMenus = compactMobileComposer;
+    const activeSendIconColor = compactMobileComposer ? theme.colors.text : theme.colors.button.primary.tint;
     const isSendBlocked = props.blockSend ?? false;
 
-    const hasText = props.value.trim().length > 0;
-    const canPressSendButton = !props.isSending
-        && !props.isSendDisabled
-        && (isSendBlocked ? hasText : (hasText || !!props.onMicPress));
+    // `hasText` drives only the send-button appearance/enabled state. It's
+    // updated via startTransition from the keystroke handler so a busy reducer
+    // never blocks the next character from landing in the textarea.
+    const [hasText, setHasText] = React.useState(() => props.initialValue.trim().length > 0);
+    const hasImages = (props.selectedImages?.length ?? 0) > 0;
+    const hasComposerContent = hasText || hasImages;
 
     // Check if this is a Codex, Gemini, or OpenClaw session
     // Use metadata.flavor for existing sessions, agentType prop for new sessions
-    const isCodex = props.metadata?.flavor === 'codex' || props.agentType === 'codex';
+    const isRig = isRigMetadata(props.metadata);
+    const isCodex = !isRig && (props.metadata?.flavor === 'codex' || props.agentType === 'codex');
     const isGemini = props.metadata?.flavor === 'gemini' || props.agentType === 'gemini';
     const isOpenClaw = props.metadata?.flavor === 'openclaw' || props.agentType === 'openclaw';
     const displayPermissionMode = React.useMemo(() => (
@@ -326,6 +723,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     ), [props.availableModes]);
     const availableModels = props.availableModels ?? [];
     const availableEffortLevels = props.availableEffortLevels ?? [];
+    const modelLabel = props.modelMode?.name ?? t('agentInput.model.title');
+    const effortLabel = props.effortLevel?.name;
+    const canOpenModelPicker = availableModels.length > 0 && !!props.onModelModeChange;
+    const canOpenEffortPicker = availableEffortLevels.length > 0 && !!props.onEffortLevelChange;
     const isSandboxEnabled = React.useMemo(() => {
         const sandbox = props.metadata?.sandbox as unknown;
         if (!sandbox) {
@@ -352,7 +753,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Calculate context warning
     const contextWarning = props.usageData?.contextSize
-        ? getContextWarning(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme)
+        ? getContextWarning(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme, props.usageData.contextWindow)
         : null;
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
@@ -360,23 +761,138 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Abort button state
     const [isAborting, setIsAborting] = React.useState(false);
+    const [stopRequested, setStopRequested] = React.useState(false);
     const shakerRef = React.useRef<ShakeInstance>(null);
     const sendBlockShakerRef = React.useRef<ShakeInstance>(null);
     const inputRef = React.useRef<MultiTextInputHandle>(null);
+    const primaryAction = resolveAgentInputPrimaryAction({
+        hasComposerContent,
+        isSendBlocked,
+        isSendDisabled: props.isSendDisabled ?? false,
+        showAbortButton: props.showAbortButton ?? false,
+        canAbort: !!props.onAbort && !stopRequested,
+    });
+    const shouldShowStopButton = primaryAction === 'stop';
+    const canSendMessage = primaryAction === 'send';
+    const mobileCanPressSendButton = !isAborting && primaryAction !== 'idle';
+    const desktopCanPressSendButton = !props.isSending
+        && !props.isSendDisabled
+        && (isSendBlocked
+            ? hasComposerContent
+            : hasComposerContent || !!props.onMicPress);
+    const canPressSendButton = compactMobileComposer
+        ? mobileCanPressSendButton
+        : desktopCanPressSendButton;
+
+    // A local acknowledgement avoids leaving Stop visible forever when the
+    // session-status update arrives after the abort RPC has completed. The next
+    // agent turn, or the eventual idle update, makes Stop eligible again.
+    React.useEffect(() => {
+        if (!props.showAbortButton) {
+            setStopRequested(false);
+        }
+    }, [props.showAbortButton]);
 
     // Forward ref to the MultiTextInput
     React.useImperativeHandle(ref, () => inputRef.current!, []);
 
-    // Autocomplete state - track text and selection together
-    const [inputState, setInputState] = React.useState<TextInputState>({
-        text: props.value,
-        selection: { start: 0, end: 0 }
-    });
+    // Web paste/drag — intercept image pastes and file drops for the
+    // attachment feature. Both handlers funnel through props.onAddImages.
+    React.useEffect(() => {
+        if (Platform.OS !== 'web' || !props.onAddImages) return;
 
-    // Handle combined text and selection state changes
+        const handlePaste = async (e: ClipboardEvent) => {
+            // Only handle pastes targeted at a focused text-editable element.
+            // The listener is attached to document, so without this guard a
+            // paste in the URL bar, another modal, or any focused-elsewhere
+            // input would steal images intended for somewhere else.
+            const active = document.activeElement;
+            const isEditableTarget = active instanceof HTMLInputElement
+                || active instanceof HTMLTextAreaElement
+                || (active instanceof HTMLElement && active.isContentEditable);
+            if (!isEditableTarget) return;
+
+            const { getImagesFromClipboard, fileToAttachmentPreview } = await import('@/utils/pasteImages.web');
+            const files = getImagesFromClipboard(e);
+            if (!files.length) return;
+            e.preventDefault();
+            const previews = (await Promise.all(
+                files.map((f) => fileToAttachmentPreview(f, generateThumbhash))
+            )).filter(Boolean) as Omit<AttachmentPreview, 'id'>[];
+            if (previews.length) {
+                props.onAddImages!(previews.map((p) => ({
+                    ...p,
+                    id: `paste_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                })));
+            }
+        };
+
+        // dragover must call preventDefault for drop to fire; we gate on
+        // `types.includes('Files')` so we don't hijack drag-text/HTML in the
+        // rest of the app.
+        const isFileDrag = (e: DragEvent) => {
+            const types = e.dataTransfer?.types;
+            if (!types) return false;
+            // DataTransferItemList vs DOMStringList — both expose .includes-ish.
+            for (let i = 0; i < types.length; i++) {
+                if (types[i] === 'Files') return true;
+            }
+            return false;
+        };
+
+        const handleDragOver = (e: DragEvent) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        };
+
+        const handleDrop = async (e: DragEvent) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            const { getImagesFromDrop, fileToAttachmentPreview } = await import('@/utils/pasteImages.web');
+            const files = getImagesFromDrop(e);
+            if (!files.length) return;
+            const previews = (await Promise.all(
+                files.map((f) => fileToAttachmentPreview(f, generateThumbhash))
+            )).filter(Boolean) as Omit<AttachmentPreview, 'id'>[];
+            if (previews.length) {
+                props.onAddImages!(previews.map((p) => ({
+                    ...p,
+                    id: `drop_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                })));
+            }
+        };
+
+        document.addEventListener('paste', handlePaste as any);
+        document.addEventListener('dragover', handleDragOver);
+        document.addEventListener('drop', handleDrop);
+        return () => {
+            document.removeEventListener('paste', handlePaste as any);
+            document.removeEventListener('dragover', handleDragOver);
+            document.removeEventListener('drop', handleDrop);
+        };
+    }, [props.onAddImages]);
+
+    // Autocomplete state — text + selection. Updated via startTransition so
+    // typing renders the character immediately and the autocomplete pipeline
+    // catches up on the next idle frame instead of blocking input.
+    const [inputState, setInputState] = React.useState<TextInputState>(() => ({
+        text: props.initialValue,
+        selection: { start: props.initialValue.length, end: props.initialValue.length }
+    }));
+
+    const onChangeTextProp = props.onChangeText;
+    const handleTextChange = React.useCallback((text: string) => {
+        React.startTransition(() => {
+            setHasText(text.trim().length > 0);
+        });
+        onChangeTextProp?.(text);
+    }, [onChangeTextProp]);
+
     const handleInputStateChange = React.useCallback((newState: TextInputState) => {
-        // console.log('📝 Input state changed:', JSON.stringify(newState));
-        setInputState(newState);
+        React.startTransition(() => {
+            setInputState(newState);
+        });
     }, []);
 
     // Use the tracked selection from inputState
@@ -424,27 +940,86 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hapticsLight();
     }, [suggestions, inputState, props.autocompletePrefixes]);
 
-    // Settings modal state
-    const [showSettings, setShowSettings] = React.useState(false);
+    // The compact composer has separate controls for permission, model, and
+    // effort. Keep a single popup state so only one selection surface is ever
+    // visible, including while we dismiss the keyboard on mobile.
+    type ComposerPicker = 'permission' | 'model' | 'effort';
+    const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
+    const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
+    const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
+    const pickerOpenTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Handle settings button press
-    const handleSettingsPress = React.useCallback(() => {
-        hapticsLight();
-        setShowSettings(prev => !prev);
+    const cancelPendingPickerOpen = React.useCallback(() => {
+        pickerOpeningRef.current = null;
+        pickerKeyboardSubscriptionRef.current?.remove();
+        pickerKeyboardSubscriptionRef.current = null;
+        if (pickerOpenTimerRef.current) {
+            clearTimeout(pickerOpenTimerRef.current);
+            pickerOpenTimerRef.current = null;
+        }
     }, []);
+
+    const closePicker = React.useCallback(() => {
+        cancelPendingPickerOpen();
+        setOpenPicker(null);
+    }, [cancelPendingPickerOpen]);
+
+    React.useEffect(() => cancelPendingPickerOpen, [cancelPendingPickerOpen]);
+
+    const handlePickerPress = React.useCallback((picker: ComposerPicker) => {
+        hapticsLight();
+        if (openPicker === picker || pickerOpeningRef.current === picker) {
+            closePicker();
+            return;
+        }
+
+        closePicker();
+        if (Platform.OS === 'web' || !Keyboard.isVisible()) {
+            setOpenPicker(picker);
+            return;
+        }
+
+        pickerOpeningRef.current = picker;
+        const finishOpening = () => {
+            const pickerToOpen = pickerOpeningRef.current;
+            cancelPendingPickerOpen();
+            if (pickerToOpen) {
+                setOpenPicker(pickerToOpen);
+            }
+        };
+        pickerKeyboardSubscriptionRef.current = Keyboard.addListener('keyboardDidHide', finishOpening);
+        pickerOpenTimerRef.current = setTimeout(finishOpening, 420);
+        inputRef.current?.blur();
+        Keyboard.dismiss();
+    }, [cancelPendingPickerOpen, closePicker, openPicker]);
+
+    const handleSettingsPress = React.useCallback(() => {
+        handlePickerPress('permission');
+    }, [handlePickerPress]);
+
+    const handleModelPress = React.useCallback(() => {
+        if (!canOpenModelPicker) return;
+        handlePickerPress('model');
+    }, [canOpenModelPicker, handlePickerPress]);
+
+    const handleEffortPress = React.useCallback(() => {
+        if (!canOpenEffortPicker) return;
+        handlePickerPress('effort');
+    }, [canOpenEffortPicker, handlePickerPress]);
 
     // Handle settings selection
     const handleSettingsSelect = React.useCallback((mode: PermissionMode) => {
         hapticsLight();
         props.onPermissionModeChange?.(mode);
-        setShowSettings(false);
-    }, [props.onPermissionModeChange]);
+        closePicker();
+    }, [closePicker, props.onPermissionModeChange]);
 
     // Handle abort button press
     const handleAbortPress = React.useCallback(async () => {
         if (!props.onAbort) return;
 
         hapticsError();
+        setStopRequested(true);
         setIsAborting(true);
         const startTime = Date.now();
 
@@ -458,6 +1033,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }
         } catch (error) {
             // Shake on error
+            setStopRequested(false);
             shakerRef.current?.shake();
             console.error('Abort RPC call failed:', error);
         } finally {
@@ -476,15 +1052,101 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             handleBlockedSendAttempt();
             return;
         }
-        if (props.isSendDisabled || props.isSending) return;
+        if (props.isSendDisabled || (!compactMobileComposer && props.isSending)) return;
 
         hapticsLight();
-        if (hasText) {
+        // Live read avoids stalling behind the transitioned `hasText`.
+        const liveHasText = (inputRef.current?.getText() ?? '').trim().length > 0;
+        if (liveHasText || hasImages) {
+            setStopRequested(false);
             props.onSend();
-        } else {
+        } else if (!compactMobileComposer) {
             props.onMicPress?.();
         }
-    }, [handleBlockedSendAttempt, hasText, isSendBlocked, props]);
+    }, [compactMobileComposer, handleBlockedSendAttempt, hasImages, isSendBlocked, props.isSendDisabled, props.isSending, props.onMicPress, props.onSend]);
+
+    const handleMicrophonePress = React.useCallback(() => {
+        if (!props.onMicPress || props.isSendDisabled) return;
+        hapticsLight();
+        props.onMicPress();
+    }, [props.isSendDisabled, props.onMicPress]);
+
+    const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
+        if (!props.onPermissionModeChange || availableModes.length === 0) {
+            return [];
+        }
+        return [{
+            key: 'permission',
+            label: isCodex
+                ? t('agentInput.codexPermissionMode.title')
+                : isGemini
+                    ? t('agentInput.geminiPermissionMode.title')
+                    : t('agentInput.permissionMode.title'),
+            systemImage: 'shield',
+            options: availableModes.map((mode) => ({ key: mode.key, label: withSandboxSuffix(mode.name, mode.key) })),
+            selectedKey: permissionModeKey,
+            onSelect: (key) => {
+                const mode = availableModes.find((candidate) => candidate.key === key);
+                if (mode) handleSettingsSelect(mode);
+            },
+        }];
+    }, [availableModes, handleSettingsSelect, isCodex, isGemini, permissionModeKey, props.onPermissionModeChange, withSandboxSuffix]);
+
+    const modelSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
+        const groups: NativeSettingsMenuGroup[] = [];
+        if (availableModels.length > 0 && props.onModelModeChange) {
+            groups.push({
+                key: 'model',
+                label: props.modelMode?.name ?? t('agentInput.model.title'),
+                systemImage: 'cube',
+                options: availableModels.map((model) => ({ key: model.key, label: model.name })),
+                selectedKey: props.modelMode?.key,
+                onSelect: (key) => {
+                    const model = availableModels.find((candidate) => candidate.key === key);
+                    if (!model) return;
+                    hapticsLight();
+                    props.onModelModeChange?.(model);
+                },
+            });
+        }
+        if (availableEffortLevels.length > 0 && props.onEffortLevelChange) {
+            groups.push({
+                key: 'effort',
+                label: props.effortLevel?.name ?? t('agentInput.effort.title'),
+                systemImage: 'bolt',
+                options: availableEffortLevels.map((level) => ({ key: level.key, label: level.name })),
+                selectedKey: props.effortLevel?.key,
+                onSelect: (key) => {
+                    const level = availableEffortLevels.find((candidate) => candidate.key === key);
+                    if (!level) return;
+                    hapticsLight();
+                    props.onEffortLevelChange?.(level);
+                },
+            });
+        }
+        return groups;
+    }, [availableEffortLevels, availableModels, props.effortLevel?.key, props.modelMode?.key, props.onEffortLevelChange, props.onModelModeChange]);
+
+    const modelSettingsGroup = modelSettingsGroups.find((group) => group.key === 'model');
+    const effortSettingsGroup = modelSettingsGroups.find((group) => group.key === 'effort');
+
+    const renderModelValue = () => (
+        <>
+            <Ionicons name="flash" size={18} color={theme.colors.text} />
+            <Text style={styles.mobileModeText} numberOfLines={1}>
+                {modelLabel}
+            </Text>
+        </>
+    );
+
+    const renderEffortValue = () => (
+        <>
+            <Text style={styles.mobileModeSeparator}>·</Text>
+            <Text style={styles.mobileModeText} numberOfLines={1}>
+                {effortLabel ?? t('agentInput.effort.title')}
+            </Text>
+        </>
+    );
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -529,7 +1191,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             // to avoid false positives on Windows touch-screen laptops with keyboards.
             const isTouchDevice = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
             if (agentInputEnterToSend && event.key === 'Enter' && !event.shiftKey && !isTouchDevice) {
-                if (props.value.trim()) {
+                // Read live text from the textarea — `hasText` is debounced via
+                // startTransition and would lag behind a quick type-then-Enter.
+                const liveText = inputRef.current?.getText() ?? '';
+                if (liveText.trim()) {
                     if (isSendBlocked) {
                         handleBlockedSendAttempt();
                     } else if (!props.isSendDisabled) {
@@ -549,7 +1214,347 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
         }
         return false; // Key was not handled
-    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, agentInputEnterToSend, props.value, props.onSend, props.onPermissionModeChange, availableModes, permissionModeKey, isSendBlocked, handleBlockedSendAttempt, props.isSendDisabled]);
+    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, agentInputEnterToSend, props.onSend, props.onPermissionModeChange, availableModes, permissionModeKey, isSendBlocked, handleBlockedSendAttempt, props.isSendDisabled]);
+
+    const desktopActionControls = (
+        <View style={styles.actionButtonsContainer}>
+            <View style={{ flexDirection: 'column', flex: 1, gap: 2 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    {props.zenMode && <View style={{ flex: 1 }} />}
+                    {!props.zenMode && <View style={styles.actionButtonsLeft}>
+                        {props.onPermissionModeChange && (
+                            <Pressable
+                                onPress={handleSettingsPress}
+                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                                style={(p) => ({
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    borderRadius: Platform.select({ default: 16, android: 20 }),
+                                    paddingHorizontal: 8,
+                                    paddingVertical: 6,
+                                    justifyContent: 'center',
+                                    height: 32,
+                                    opacity: p.pressed ? 0.7 : 1,
+                                })}
+                            >
+                                <Octicons name="gear" size={16} color={theme.colors.button.secondary.tint} />
+                            </Pressable>
+                        )}
+
+                        {props.agentType && props.onAgentClick && (
+                            <Pressable
+                                onPress={() => {
+                                    hapticsLight();
+                                    props.onAgentClick?.();
+                                }}
+                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                                style={(p) => ({
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    borderRadius: Platform.select({ default: 16, android: 20 }),
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    justifyContent: 'center',
+                                    height: 32,
+                                    opacity: p.pressed ? 0.7 : 1,
+                                    gap: 6,
+                                })}
+                            >
+                                <Octicons name="cpu" size={14} color={theme.colors.button.secondary.tint} />
+                                <Text style={{
+                                    fontSize: 13,
+                                    color: theme.colors.button.secondary.tint,
+                                    fontWeight: '600',
+                                    ...Typography.default('semiBold'),
+                                }}>
+                                    {props.agentType === 'claude'
+                                        ? t('agentInput.agent.claude')
+                                        : props.agentType === 'codex'
+                                            ? t('agentInput.agent.codex')
+                                            : props.agentType === 'openclaw'
+                                                ? t('agentInput.agent.openclaw')
+                                                : t('agentInput.agent.gemini')}
+                                </Text>
+                            </Pressable>
+                        )}
+
+                        {props.onAbort && (
+                            <Shaker ref={shakerRef}>
+                                <Pressable
+                                    style={(p) => ({
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        borderRadius: Platform.select({ default: 16, android: 20 }),
+                                        paddingHorizontal: 8,
+                                        paddingVertical: 6,
+                                        justifyContent: 'center',
+                                        height: 32,
+                                        opacity: p.pressed ? 0.7 : 1,
+                                    })}
+                                    hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                                    onPress={handleAbortPress}
+                                    disabled={isAborting}
+                                >
+                                    {isAborting ? (
+                                        <ActivityIndicator size="small" color={theme.colors.button.secondary.tint} />
+                                    ) : (
+                                        <Octicons name="stop" size={16} color={theme.colors.button.secondary.tint} />
+                                    )}
+                                </Pressable>
+                            </Shaker>
+                        )}
+
+                        <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
+
+                        {props.onPickImages && (
+                            <Pressable
+                                onPress={props.onPickImages}
+                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                                style={(p) => ({
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    borderRadius: Platform.select({ default: 16, android: 20 }),
+                                    paddingHorizontal: 8,
+                                    paddingVertical: 6,
+                                    justifyContent: 'center',
+                                    height: 32,
+                                    opacity: p.pressed ? 0.7 : 1,
+                                })}
+                            >
+                                <Ionicons
+                                    name="image-outline"
+                                    size={16}
+                                    color={(props.selectedImages?.length ?? 0) > 0
+                                        ? theme.colors.radio.active
+                                        : theme.colors.button.secondary.tint}
+                                />
+                            </Pressable>
+                        )}
+                    </View>}
+
+                    <View
+                        style={[
+                            styles.sendButton,
+                            isSendBlocked
+                                ? styles.sendButtonLocked
+                                : (hasText || props.isSending || (props.onMicPress && !props.isMicActive))
+                                    ? styles.sendButtonActive
+                                    : styles.sendButtonInactive,
+                        ]}
+                    >
+                        <Pressable
+                            style={(p) => ({
+                                width: '100%',
+                                height: '100%',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                opacity: p.pressed ? 0.7 : 1,
+                            })}
+                            hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                            onPress={handleSendPress}
+                            disabled={!desktopCanPressSendButton}
+                        >
+                            {props.isSending ? (
+                                <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
+                            ) : isSendBlocked ? (
+                                <Ionicons name="lock-closed" size={15} color={theme.colors.textSecondary} />
+                            ) : hasText ? (
+                                <Octicons
+                                    name="arrow-up"
+                                    size={16}
+                                    color={theme.colors.button.primary.tint}
+                                    style={[styles.sendButtonIcon, { marginTop: Platform.OS === 'web' ? 2 : 0 }]}
+                                />
+                            ) : props.onMicPress && !props.isMicActive ? (
+                                <Image
+                                    source={require('@/assets/images/icon-voice-white.png')}
+                                    style={{ width: 24, height: 24 }}
+                                    tintColor={theme.colors.button.primary.tint}
+                                />
+                            ) : (
+                                <Octicons
+                                    name="arrow-up"
+                                    size={16}
+                                    color={theme.colors.button.primary.tint}
+                                    style={[styles.sendButtonIcon, { marginTop: Platform.OS === 'web' ? 2 : 0 }]}
+                                />
+                            )}
+                        </Pressable>
+                    </View>
+                </View>
+            </View>
+        </View>
+    );
+
+    const renderDesktopPickerOption = (
+        key: string,
+        selected: boolean,
+        label: string,
+        description: string | null | undefined,
+        onPress: () => void,
+    ) => (
+        <Pressable
+            key={key}
+            onPress={onPress}
+            style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent',
+            })}
+        >
+            <View style={{
+                width: 16,
+                height: 16,
+                borderRadius: 8,
+                borderWidth: 2,
+                borderColor: selected ? theme.colors.radio.active : theme.colors.radio.inactive,
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginRight: 12,
+                marginTop: 2,
+            }}>
+                {selected && <View style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 3,
+                    backgroundColor: theme.colors.radio.dot,
+                }} />}
+            </View>
+            <View style={{ flex: 1 }}>
+                <Text style={{
+                    fontSize: 14,
+                    color: selected ? theme.colors.radio.active : theme.colors.text,
+                    ...Typography.default(),
+                }}>
+                    {label}
+                </Text>
+                {!!description && (
+                    <Text style={{
+                        fontSize: 11,
+                        color: theme.colors.textSecondary,
+                        ...Typography.default(),
+                    }}>
+                        {description}
+                    </Text>
+                )}
+            </View>
+        </Pressable>
+    );
+
+    const desktopSettingsOverlay = !compactMobileComposer && openPicker === 'permission' ? (
+        <>
+            <TouchableWithoutFeedback onPress={closePicker}>
+                <View style={styles.overlayBackdrop} />
+            </TouchableWithoutFeedback>
+            <View style={[
+                styles.settingsOverlay,
+                { paddingHorizontal: screenWidth > 700 ? 0 : 8 },
+            ]}>
+                <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
+                    {props.showSessionStatusInfoInSettings ? (
+                        <>
+                            <View style={styles.settingsStatusInfo}>
+                                <SessionStatusBar
+                                    gitBranch={props.sessionStatusGitBranch}
+                                    modelLabel={props.sessionStatusModelLabel ?? null}
+                                    effortLabel={props.sessionStatusEffortLabel ?? null}
+                                    contextSize={props.usageData?.contextSize}
+                                    contextWindow={props.usageData?.contextWindow}
+                                />
+                            </View>
+                            <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 16 }} />
+                        </>
+                    ) : null}
+
+                    <View style={styles.overlaySection}>
+                        <Text style={styles.overlaySectionTitle}>
+                            {isCodex
+                                ? t('agentInput.codexPermissionMode.title')
+                                : isGemini
+                                    ? t('agentInput.geminiPermissionMode.title')
+                                    : t('agentInput.permissionMode.title')}
+                        </Text>
+                        {availableModes.map((mode) => renderDesktopPickerOption(
+                            mode.key,
+                            permissionModeKey === mode.key,
+                            withSandboxSuffix(mode.name, mode.key),
+                            mode.description,
+                            () => handleSettingsSelect(mode),
+                        ))}
+                    </View>
+
+                    <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 16 }} />
+
+                    <View style={{ flexDirection: 'row' }}>
+                        <View style={{ paddingVertical: 8, flex: 1 }}>
+                            <Text style={{
+                                fontSize: 12,
+                                fontWeight: '600',
+                                color: theme.colors.textSecondary,
+                                paddingHorizontal: 16,
+                                paddingBottom: 4,
+                                ...Typography.default('semiBold'),
+                            }}>
+                                {t('agentInput.model.title')}
+                            </Text>
+                            {availableModels.length > 0 ? availableModels.map((model) => renderDesktopPickerOption(
+                                model.key,
+                                props.modelMode?.key === model.key,
+                                model.name,
+                                model.description,
+                                () => {
+                                    hapticsLight();
+                                    props.onModelModeChange?.(model);
+                                    closePicker();
+                                },
+                            )) : (
+                                <Text style={{
+                                    fontSize: 13,
+                                    color: theme.colors.textSecondary,
+                                    paddingHorizontal: 16,
+                                    paddingVertical: 8,
+                                    ...Typography.default(),
+                                }}>
+                                    {t('agentInput.model.configureInCli')}
+                                </Text>
+                            )}
+                        </View>
+
+                        {availableEffortLevels.length > 0 && props.onEffortLevelChange && (
+                            <>
+                                <View style={{ width: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
+                                <View style={{ paddingVertical: 8, flex: 1 }}>
+                                    <Text style={{
+                                        fontSize: 12,
+                                        fontWeight: '600',
+                                        color: theme.colors.textSecondary,
+                                        paddingHorizontal: 16,
+                                        paddingBottom: 4,
+                                        ...Typography.default('semiBold'),
+                                    }}>
+                                        {t('agentInput.effort.title')}
+                                    </Text>
+                                    {availableEffortLevels.map((level) => renderDesktopPickerOption(
+                                        level.key,
+                                        props.effortLevel?.key === level.key,
+                                        level.name,
+                                        level.description,
+                                        () => {
+                                            hapticsLight();
+                                            props.onEffortLevelChange?.(level);
+                                            closePicker();
+                                        },
+                                    ))}
+                                </View>
+                            </>
+                        )}
+                    </View>
+                </FloatingOverlay>
+            </View>
+        </>
+    ) : null;
 
 
 
@@ -581,119 +1586,143 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
                 )}
 
-                {/* Settings overlay */}
-                {showSettings && (
+                {desktopSettingsOverlay}
+
+                {/* Permission, model, and effort pickers open independently
+                    from their matching controls in the compact composer action row. */}
+                {compactMobileComposer && !useNativeSettingsMenus && openPicker && (
                     <>
-                        <TouchableWithoutFeedback onPress={() => setShowSettings(false)}>
-                            <View style={styles.overlayBackdrop} />
-                        </TouchableWithoutFeedback>
+                        <AnimatedClickAwayBackdrop
+                            onPress={closePicker}
+                            style={styles.overlayBackdrop}
+                        />
                         <View style={[
                             styles.settingsOverlay,
-                            { paddingHorizontal: screenWidth > 700 ? 0 : 8 }
+                            { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
                         ]}>
                             <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                                {/* Permission Mode Section */}
-                                <View style={styles.overlaySection}>
-                                    <Text style={styles.overlaySectionTitle}>
-                                        {isCodex ? t('agentInput.codexPermissionMode.title') : isGemini ? t('agentInput.geminiPermissionMode.title') : t('agentInput.permissionMode.title')}
-                                    </Text>
-                                    {availableModes.map((mode) => {
-                                        const isSelected = permissionModeKey === mode.key;
+                                {props.showSessionStatusInfoInSettings ? (
+                                    <>
+                                        <View style={styles.settingsStatusInfo}>
+                                            <SessionStatusBar
+                                                gitBranch={props.sessionStatusGitBranch}
+                                                modelLabel={props.sessionStatusModelLabel ?? null}
+                                                effortLabel={props.sessionStatusEffortLabel ?? null}
+                                                contextSize={props.usageData?.contextSize}
+                                                contextWindow={props.usageData?.contextWindow}
+                                            />
+                                        </View>
+                                        <View style={styles.overlayDivider} />
+                                    </>
+                                ) : null}
 
-                                        return (
-                                            <Pressable
-                                                key={mode.key}
-                                                onPress={() => handleSettingsSelect(mode)}
-                                                style={({ pressed }) => ({
-                                                    flexDirection: 'row',
-                                                    alignItems: 'flex-start',
-                                                    paddingHorizontal: 16,
-                                                    paddingVertical: 8,
-                                                    backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent'
-                                                })}
-                                            >
-                                                <View style={{
-                                                    width: 16,
-                                                    height: 16,
-                                                    borderRadius: 8,
-                                                    borderWidth: 2,
-                                                    borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    marginRight: 12,
-                                                    marginTop: 2,
-                                                }}>
-                                                    {isSelected && (
-                                                        <View style={{
+                                {openPicker === 'permission' ? (
+                                    <View style={styles.overlaySection}>
+                                        <Text style={styles.overlaySectionTitle}>
+                                            {isCodex ? t('agentInput.codexPermissionMode.title') : isGemini ? t('agentInput.geminiPermissionMode.title') : t('agentInput.permissionMode.title')}
+                                        </Text>
+                                        {availableModes.map((mode) => {
+                                            const isSelected = permissionModeKey === mode.key;
+                                            return (
+                                                <BubblePressable
+                                                    key={mode.key}
+                                                    disabled={!props.onPermissionModeChange || mode.disabled}
+                                                    onPress={() => handleSettingsSelect(mode)}
+                                                    style={({ pressed }) => ({
+                                                        flexDirection: 'row',
+                                                        alignItems: 'flex-start',
+                                                        paddingHorizontal: 16,
+                                                        paddingVertical: 8,
+                                                        marginHorizontal: 8,
+                                                        borderRadius: 14,
+                                                        backgroundColor: pressed
+                                                            ? theme.colors.surfacePressedOverlay
+                                                            : isSelected
+                                                                ? theme.colors.glass.backgroundSubtle
+                                                                : 'transparent',
+                                                        opacity: (!props.onPermissionModeChange || mode.disabled) ? 0.55 : 1,
+                                                    })}
+                                                >
+                                                    <View style={{
+                                                        width: 16,
+                                                        height: 16,
+                                                        borderRadius: 8,
+                                                        borderWidth: 2,
+                                                        borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        marginRight: 12,
+                                                        marginTop: 2,
+                                                    }}>
+                                                        {isSelected && <View style={{
                                                             width: 6,
                                                             height: 6,
                                                             borderRadius: 3,
-                                                            backgroundColor: theme.colors.radio.dot
-                                                        }} />
-                                                    )}
-                                                </View>
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={{
-                                                        fontSize: 14,
-                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                        ...Typography.default()
-                                                    }}>
-                                                        {withSandboxSuffix(mode.name, mode.key)}
-                                                    </Text>
-                                                    {!!mode.description && (
-                                                        <Text style={{
-                                                            fontSize: 11,
-                                                            color: theme.colors.textSecondary,
-                                                            ...Typography.default()
-                                                        }}>
-                                                            {mode.description}
-                                                        </Text>
-                                                    )}
-                                                </View>
-                                            </Pressable>
-                                        );
-                                    })}
-                                </View>
-
-                                {/* Divider */}
-                                <View style={{
-                                    height: 1,
-                                    backgroundColor: theme.colors.divider,
-                                    marginHorizontal: 16
-                                }} />
-
-                                {/* Model + Effort side by side */}
-                                <View style={{ flexDirection: 'row' }}>
-                                    {/* Model Section */}
-                                    <View style={{ paddingVertical: 8, flex: 1 }}>
-                                        <Text style={{
-                                            fontSize: 12,
-                                            fontWeight: '600',
-                                            color: theme.colors.textSecondary,
-                                            paddingHorizontal: 16,
-                                            paddingBottom: 4,
-                                            ...Typography.default('semiBold')
-                                        }}>
-                                            {t('agentInput.model.title')}
-                                        </Text>
-                                        {availableModels.length > 0 ? (
-                                            availableModels.map((model) => {
+                                                            backgroundColor: theme.colors.radio.dot,
+                                                        }} />}
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                                            {mode.semanticKind && (
+                                                                <Ionicons
+                                                                    name={permissionKindIcon(mode.semanticKind)}
+                                                                    size={13}
+                                                                    color={isSelected ? theme.colors.radio.active : theme.colors.textSecondary}
+                                                                />
+                                                            )}
+                                                            <Text style={{
+                                                                fontSize: 14,
+                                                                color: isSelected ? theme.colors.radio.active : theme.colors.text,
+                                                                ...Typography.default(),
+                                                            }}>
+                                                                {withSandboxSuffix(mode.name, mode.key)}
+                                                            </Text>
+                                                        </View>
+                                                        {!!mode.description && (
+                                                            <Text style={{
+                                                                fontSize: 11,
+                                                                color: theme.colors.textSecondary,
+                                                                ...Typography.default(),
+                                                            }}>
+                                                                {mode.description}
+                                                            </Text>
+                                                        )}
+                                                    </View>
+                                                </BubblePressable>
+                                            );
+                                        })}
+                                    </View>
+                                ) : (
+                                    <>
+                                        {openPicker === 'model' && (
+                                        <View style={styles.overlaySection}>
+                                            <Text style={styles.overlaySectionTitle}>
+                                                {props.modelMode?.name ?? t('agentInput.model.title')}
+                                            </Text>
+                                            {availableModels.length > 0 ? availableModels.map((model) => {
                                                 const isSelected = props.modelMode?.key === model.key;
-
                                                 return (
-                                                    <Pressable
+                                                    <BubblePressable
                                                         key={model.key}
+                                                        disabled={!props.onModelModeChange || model.disabled}
                                                         onPress={() => {
                                                             hapticsLight();
                                                             props.onModelModeChange?.(model);
-                                                            setShowSettings(false);
+                                                            closePicker();
                                                         }}
                                                         style={({ pressed }) => ({
                                                             flexDirection: 'row',
                                                             alignItems: 'flex-start',
                                                             paddingHorizontal: 16,
                                                             paddingVertical: 8,
-                                                            backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent'
+                                                            marginHorizontal: 8,
+                                                            borderRadius: 14,
+                                                            backgroundColor: pressed
+                                                                ? theme.colors.surfacePressedOverlay
+                                                                : isSelected
+                                                                    ? theme.colors.glass.backgroundSubtle
+                                                                    : 'transparent',
+                                                            opacity: (!props.onModelModeChange || model.disabled) ? 0.55 : 1,
                                                         })}
                                                     >
                                                         <View style={{
@@ -707,546 +1736,396 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                             marginRight: 12,
                                                             marginTop: 2,
                                                         }}>
-                                                            {isSelected && (
-                                                                <View style={{
-                                                                    width: 6,
-                                                                    height: 6,
-                                                                    borderRadius: 3,
-                                                                    backgroundColor: theme.colors.radio.dot
-                                                                }} />
-                                                            )}
+                                                            {isSelected && <View style={{
+                                                                width: 6,
+                                                                height: 6,
+                                                                borderRadius: 3,
+                                                                backgroundColor: theme.colors.radio.dot,
+                                                            }} />}
                                                         </View>
-                                                        <View>
-                                                            <Text style={{
-                                                                fontSize: 14,
-                                                                color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                ...Typography.default()
-                                                            }}>
-                                                                {model.name}
-                                                            </Text>
+                                                        <View style={{ flex: 1 }}>
+                                                            {model.providerName ? (
+                                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                                                    <ProviderIcon kind={model.providerKind} size={12} />
+                                                                    <Text style={{
+                                                                        fontSize: 14,
+                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
+                                                                        ...Typography.default(),
+                                                                    }}>
+                                                                        {model.name}
+                                                                    </Text>
+                                                                </View>
+                                                            ) : (
+                                                                <Text style={{
+                                                                    fontSize: 14,
+                                                                    color: isSelected ? theme.colors.radio.active : theme.colors.text,
+                                                                    ...Typography.default(),
+                                                                }}>
+                                                                    {model.name}
+                                                                </Text>
+                                                            )}
                                                             {!!model.description && (
                                                                 <Text style={{
                                                                     fontSize: 11,
                                                                     color: theme.colors.textSecondary,
-                                                                    ...Typography.default()
+                                                                    ...Typography.default(),
                                                                 }}>
                                                                     {model.description}
                                                                 </Text>
                                                             )}
                                                         </View>
-                                                    </Pressable>
+                                                    </BubblePressable>
                                                 );
-                                            })
-                                        ) : (
-                                            <Text style={{
-                                                fontSize: 13,
-                                                color: theme.colors.textSecondary,
-                                                paddingHorizontal: 16,
-                                                paddingVertical: 8,
-                                                ...Typography.default()
-                                            }}>
-                                                {t('agentInput.model.configureInCli')}
-                                            </Text>
-                                        )}
-                                    </View>
-
-                                    {/* Effort Level Section — second column */}
-                                    {availableEffortLevels.length > 0 && props.onEffortLevelChange && (
-                                        <>
-                                            <View style={{
-                                                width: 1,
-                                                backgroundColor: theme.colors.divider,
-                                                marginVertical: 8,
-                                            }} />
-                                            <View style={{ paddingVertical: 8, flex: 1 }}>
+                                            }) : (
                                                 <Text style={{
-                                                    fontSize: 12,
-                                                    fontWeight: '600',
+                                                    fontSize: 13,
                                                     color: theme.colors.textSecondary,
                                                     paddingHorizontal: 16,
-                                                    paddingBottom: 4,
-                                                    ...Typography.default('semiBold')
+                                                    paddingVertical: 8,
+                                                    ...Typography.default(),
                                                 }}>
-                                                    {t('agentInput.effort.title')}
+                                                    {t('agentInput.model.configureInCli')}
                                                 </Text>
-                                                {availableEffortLevels.map((level) => {
-                                                    const isSelected = props.effortLevel?.key === level.key;
-
-                                                    return (
-                                                        <Pressable
-                                                            key={level.key}
-                                                            onPress={() => {
-                                                                hapticsLight();
-                                                                props.onEffortLevelChange?.(level);
-                                                                setShowSettings(false);
-                                                            }}
-                                                            style={({ pressed }) => ({
-                                                                flexDirection: 'row',
-                                                                alignItems: 'flex-start',
-                                                                paddingHorizontal: 16,
-                                                                paddingVertical: 8,
-                                                                backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent'
-                                                            })}
-                                                        >
-                                                            <View style={{
-                                                                width: 16,
-                                                                height: 16,
-                                                                borderRadius: 8,
-                                                                borderWidth: 2,
-                                                                borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                                alignItems: 'center',
-                                                                justifyContent: 'center',
-                                                                marginRight: 12,
-                                                                marginTop: 2,
-                                                            }}>
-                                                                {isSelected && (
-                                                                    <View style={{
+                                            )}
+                                        </View>
+                                        )}
+                                        {openPicker === 'effort' && availableEffortLevels.length > 0 && props.onEffortLevelChange && (
+                                                <View style={styles.overlaySection}>
+                                                    <Text style={styles.overlaySectionTitle}>
+                                                        {props.effortLevel?.name ?? t('agentInput.effort.title')}
+                                                    </Text>
+                                                    {availableEffortLevels.map((level) => {
+                                                        const isSelected = props.effortLevel?.key === level.key;
+                                                        return (
+                                                            <BubblePressable
+                                                                key={level.key}
+                                                                onPress={() => {
+                                                                    hapticsLight();
+                                                                    props.onEffortLevelChange?.(level);
+                                                                    closePicker();
+                                                                }}
+                                                                style={({ pressed }) => ({
+                                                                    flexDirection: 'row',
+                                                                    alignItems: 'flex-start',
+                                                                    paddingHorizontal: 16,
+                                                                    paddingVertical: 8,
+                                                                    marginHorizontal: 8,
+                                                                    borderRadius: 14,
+                                                                    backgroundColor: pressed
+                                                                        ? theme.colors.surfacePressedOverlay
+                                                                        : isSelected
+                                                                            ? theme.colors.glass.backgroundSubtle
+                                                                            : 'transparent',
+                                                                })}
+                                                            >
+                                                                <View style={{
+                                                                    width: 16,
+                                                                    height: 16,
+                                                                    borderRadius: 8,
+                                                                    borderWidth: 2,
+                                                                    borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
+                                                                    alignItems: 'center',
+                                                                    justifyContent: 'center',
+                                                                    marginRight: 12,
+                                                                    marginTop: 2,
+                                                                }}>
+                                                                    {isSelected && <View style={{
                                                                         width: 6,
                                                                         height: 6,
                                                                         borderRadius: 3,
-                                                                        backgroundColor: theme.colors.radio.dot
-                                                                    }} />
-                                                                )}
-                                                            </View>
-                                                            <View>
-                                                                <Text style={{
-                                                                    fontSize: 14,
-                                                                    color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                    ...Typography.default()
-                                                                }}>
-                                                                    {level.name}
-                                                                </Text>
-                                                                {!!level.description && (
+                                                                        backgroundColor: theme.colors.radio.dot,
+                                                                    }} />}
+                                                                </View>
+                                                                <View style={{ flex: 1 }}>
                                                                     <Text style={{
-                                                                        fontSize: 11,
-                                                                        color: theme.colors.textSecondary,
-                                                                        ...Typography.default()
+                                                                        fontSize: 14,
+                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
+                                                                        ...Typography.default(),
                                                                     }}>
-                                                                        {level.description}
+                                                                        {level.name}
                                                                     </Text>
-                                                                )}
-                                                            </View>
-                                                        </Pressable>
-                                                    );
-                                                })}
-                                            </View>
-                                        </>
-                                    )}
-                                </View>
+                                                                    {!!level.description && (
+                                                                        <Text style={{
+                                                                            fontSize: 11,
+                                                                            color: theme.colors.textSecondary,
+                                                                            ...Typography.default(),
+                                                                        }}>
+                                                                            {level.description}
+                                                                        </Text>
+                                                                    )}
+                                                                </View>
+                                                            </BubblePressable>
+                                                        );
+                                                    })}
+                                                </View>
+                                        )}
+                                    </>
+                                )}
                             </FloatingOverlay>
                         </View>
                     </>
                 )}
 
-                {/* Connection status, context warning, and permission mode */}
-                {(props.connectionStatus || contextWarning || (displayPermissionMode && permissionModeKey !== 'default')) && (
-                    <View style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        paddingHorizontal: 16,
-                        paddingBottom: 4,
-                        minHeight: 20, // Fixed minimum height to prevent jumping
-                    }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 }}>
-                            {props.connectionStatus && (
-                                <>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                        <StatusDot
-                                            color={props.connectionStatus.dotColor}
-                                            isPulsing={props.connectionStatus.isPulsing}
-                                            size={6}
-                                        />
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: props.connectionStatus.color,
-                                            ...Typography.default()
-                                        }}>
-                                            {props.connectionStatus.text}
-                                        </Text>
-                                    </View>
-                                    {/* CLI Status - only shown when provided (wizard only) */}
-                                    {props.connectionStatus.cliStatus && (
-                                        <>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.claude
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    {props.connectionStatus.cliStatus.claude ? '✓' : '✗'}
-                                                </Text>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.claude
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    claude
-                                                </Text>
-                                            </View>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.codex
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    {props.connectionStatus.cliStatus.codex ? '✓' : '✗'}
-                                                </Text>
-                                                <Text style={{
-                                                    fontSize: 11,
-                                                    color: props.connectionStatus.cliStatus.codex
-                                                        ? theme.colors.success
-                                                        : theme.colors.textDestructive,
-                                                    ...Typography.default()
-                                                }}>
-                                                    codex
-                                                </Text>
-                                            </View>
-                                            {props.connectionStatus.cliStatus.gemini !== undefined && (
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                                    <Text style={{
-                                                        fontSize: 11,
-                                                        color: props.connectionStatus.cliStatus.gemini
-                                                            ? theme.colors.success
-                                                            : theme.colors.textDestructive,
-                                                        ...Typography.default()
-                                                    }}>
-                                                        {props.connectionStatus.cliStatus.gemini ? '✓' : '✗'}
-                                                    </Text>
-                                                    <Text style={{
-                                                        fontSize: 11,
-                                                        color: props.connectionStatus.cliStatus.gemini
-                                                            ? theme.colors.success
-                                                            : theme.colors.textDestructive,
-                                                        ...Typography.default()
-                                                    }}>
-                                                        gemini
-                                                    </Text>
-                                                </View>
-                                            )}
-                                        </>
-                                    )}
-                                </>
-                            )}
-                            {contextWarning && (
-                                <Text style={{
-                                    fontSize: 11,
-                                    color: contextWarning.color,
-                                    marginLeft: props.connectionStatus ? 8 : 0,
-                                    ...Typography.default()
-                                }}>
-                                    {props.connectionStatus ? '• ' : ''}{contextWarning.text}
-                                </Text>
-                            )}
-                        </View>
-                        {/* Permission badge — only shown when non-default */}
-                        {displayPermissionMode && permissionModeKey !== 'default' && (() => {
-                            const permColor = isSandboxedYoloMode ? '#4169E1' :
-                                permissionModeKey === 'acceptEdits' ? theme.colors.permission.acceptEdits :
-                                    permissionModeKey === 'bypassPermissions' ? theme.colors.permission.bypass :
-                                        permissionModeKey === 'plan' ? theme.colors.permission.plan :
-                                            permissionModeKey === 'read-only' ? theme.colors.permission.readOnly :
-                                                permissionModeKey === 'safe-yolo' ? theme.colors.permission.safeYolo :
-                                                    permissionModeKey === 'yolo' ? theme.colors.permission.yolo :
-                                                        theme.colors.textSecondary;
-                            const permIcon: 'play-forward' | 'pause' =
-                                permissionModeKey === 'plan' || permissionModeKey === 'read-only'
-                                    ? 'pause' : 'play-forward';
-                            return (
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    <Ionicons name={permIcon} size={11} color={permColor} />
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: permColor,
-                                        ...Typography.default()
-                                    }}>
-                                        {withSandboxSuffix(displayPermissionMode.name, permissionModeKey)}
-                                    </Text>
-                                </View>
-                            );
-                        })()}
-                    </View>
-                )}
+                {props.showStatusDetails !== false && (
+                    <>
+                        <AgentInputStatusRow
+                            connectionStatus={props.connectionStatus}
+                            contextWarning={contextWarning}
+                            displayPermissionMode={displayPermissionMode}
+                            permissionModeKey={permissionModeKey}
+                            permissionSemanticKind={displayPermissionMode?.semanticKind}
+                            isSandboxedYoloMode={isSandboxedYoloMode}
+                            permissionLabel={displayPermissionMode ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey) : null}
+                            zenMode={props.zenMode}
+                        />
 
-                {/* Box 1: Context Information (Machine + Path) - Only show if either exists */}
-                {(props.machineName !== undefined || props.currentPath) && (
-                    <View style={{
-                        backgroundColor: theme.colors.surfacePressed,
-                        borderRadius: 12,
-                        padding: 8,
-                        marginBottom: 8,
-                        gap: 4,
-                    }}>
-                        {/* Machine chip */}
-                        {props.machineName !== undefined && props.onMachineClick && (
-                            <Pressable
-                                onPress={() => {
-                                    hapticsLight();
-                                    props.onMachineClick?.();
-                                }}
-                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                style={(p) => ({
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    borderRadius: Platform.select({ default: 16, android: 20 }),
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    height: 32,
-                                    opacity: p.pressed ? 0.7 : 1,
-                                    gap: 6,
-                                })}
-                            >
-                                <Ionicons
-                                    name="desktop-outline"
-                                    size={14}
-                                    color={theme.colors.textSecondary}
-                                />
-                                <Text style={{
-                                    fontSize: 13,
-                                    color: theme.colors.text,
-                                    fontWeight: '600',
-                                    ...Typography.default('semiBold'),
-                                }}>
-                                    {props.machineName === null ? t('agentInput.noMachinesAvailable') : props.machineName}
-                                </Text>
-                            </Pressable>
-                        )}
-
-                        {/* Path chip */}
-                        {props.currentPath && props.onPathClick && (
-                            <Pressable
-                                onPress={() => {
-                                    hapticsLight();
-                                    props.onPathClick?.();
-                                }}
-                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                style={(p) => ({
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    borderRadius: Platform.select({ default: 16, android: 20 }),
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    height: 32,
-                                    opacity: p.pressed ? 0.7 : 1,
-                                    gap: 6,
-                                })}
-                            >
-                                <Ionicons
-                                    name="folder-outline"
-                                    size={14}
-                                    color={theme.colors.textSecondary}
-                                />
-                                <Text style={{
-                                    fontSize: 13,
-                                    color: theme.colors.text,
-                                    fontWeight: '600',
-                                    ...Typography.default('semiBold'),
-                                }}>
-                                    {props.currentPath}
-                                </Text>
-                            </Pressable>
-                        )}
-                    </View>
+                        <AgentInputContextChips
+                            machineName={props.machineName}
+                            onMachineClick={props.onMachineClick}
+                            currentPath={props.currentPath}
+                            onPathClick={props.onPathClick}
+                        />
+                    </>
                 )}
 
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef}>
-                <View style={styles.unifiedPanel}>
+                    <View style={[
+                        compactMobileComposer && styles.unifiedPanelShadow,
+                        compactMobileComposer && styles.mobileUnifiedPanelShadow,
+                    ]}>
+                        <MobileGlassSurface
+                            enabled={compactMobileComposer}
+                            nativeEffect
+                            material="frosted"
+                            intensity={92}
+                            style={[
+                                styles.unifiedPanel,
+                                compactMobileComposer && styles.mobileUnifiedPanel,
+                            ]}
+                        >
+                    {/* Attachment preview strip */}
+                    {props.selectedImages && props.selectedImages.length > 0 && (
+                        <AgentInputAttachmentStrip
+                            images={props.selectedImages}
+                            onRemove={props.onRemoveImage ?? (() => {})}
+                        />
+                    )}
                     {/* Input field */}
-                    <View style={[styles.inputContainer, props.minHeight ? { minHeight: props.minHeight } : undefined]}>
+                    <View style={[
+                        styles.inputContainer,
+                        compactMobileComposer && styles.mobileInputContainer,
+                        props.minHeight ? { minHeight: props.minHeight } : undefined,
+                    ]}>
                         <MultiTextInput
                             ref={inputRef}
-                            value={props.value}
-                            paddingTop={Platform.OS === 'web' ? 10 : 8}
-                            paddingBottom={Platform.OS === 'web' ? 10 : 8}
-                            onChangeText={props.onChangeText}
+                            defaultValue={props.initialValue}
+                            paddingTop={compactMobileComposer ? 4 : Platform.OS === 'web' ? 10 : 8}
+                            paddingBottom={compactMobileComposer ? 4 : Platform.OS === 'web' ? 10 : 8}
+                            onChangeText={handleTextChange}
                             placeholder={props.placeholder}
                             onKeyPress={handleKeyPress}
                             onStateChange={handleInputStateChange}
-                            maxHeight={120}
+                            maxHeight={Platform.OS === 'web' ? 480 : 120}
                         />
                     </View>
 
-                    {/* Action buttons below input */}
-                    <View style={styles.actionButtonsContainer}>
-                        <View style={{ flexDirection: 'column', flex: 1, gap: 2 }}>
-                            {/* Row 1: Settings, Profile (FIRST), Agent, Abort, Git Status */}
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <View style={styles.actionButtonsLeft}>
+                    {compactMobileComposer ? (
+                    /* The action order mirrors the expanded Home composer:
+                        photo, permissions, model/effort, voice, then send/stop. */
+                    <View style={[
+                        styles.actionButtonsContainer,
+                        styles.mobileActionButtonsContainer,
+                    ]}>
+                        {!props.zenMode && props.onPickImages && (
+                            <BubblePressable
+                                onPress={props.onPickImages}
+                                hitSlop={6}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityLabel="Add photo"
+                            >
+                                <Ionicons
+                                    name="add"
+                                    size={MOBILE_COMPOSER_ADD_ICON_SIZE}
+                                    color={(props.selectedImages?.length ?? 0) > 0
+                                        ? theme.colors.radio.active
+                                        : theme.colors.text}
+                                />
+                            </BubblePressable>
+                        )}
 
-                                {/* Settings button */}
-                                {props.onPermissionModeChange && (
-                                    <Pressable
-                                        onPress={handleSettingsPress}
-                                        hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                        style={(p) => ({
-                                            flexDirection: 'row',
-                                            alignItems: 'center',
-                                            borderRadius: Platform.select({ default: 16, android: 20 }),
-                                            paddingHorizontal: 8,
-                                            paddingVertical: 6,
-                                            justifyContent: 'center',
-                                            height: 32,
-                                            opacity: p.pressed ? 0.7 : 1,
-                                        })}
-                                    >
-                                        <Octicons
-                                            name={'gear'}
-                                            size={16}
-                                            color={theme.colors.button.secondary.tint}
-                                        />
-                                    </Pressable>
-                                )}
-
-                                {/* Agent selector button */}
-                                {props.agentType && props.onAgentClick && (
-                                    <Pressable
-                                        onPress={() => {
-                                            hapticsLight();
-                                            props.onAgentClick?.();
-                                        }}
-                                        hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                        style={(p) => ({
-                                            flexDirection: 'row',
-                                            alignItems: 'center',
-                                            borderRadius: Platform.select({ default: 16, android: 20 }),
-                                            paddingHorizontal: 10,
-                                            paddingVertical: 6,
-                                            justifyContent: 'center',
-                                            height: 32,
-                                            opacity: p.pressed ? 0.7 : 1,
-                                            gap: 6,
-                                        })}
-                                    >
-                                        <Octicons
-                                            name="cpu"
-                                            size={14}
-                                            color={theme.colors.button.secondary.tint}
-                                        />
-                                        <Text style={{
-                                            fontSize: 13,
-                                            color: theme.colors.button.secondary.tint,
-                                            fontWeight: '600',
-                                            ...Typography.default('semiBold'),
-                                        }}>
-                                            {props.agentType === 'claude' ? t('agentInput.agent.claude') : props.agentType === 'codex' ? t('agentInput.agent.codex') : props.agentType === 'openclaw' ? t('agentInput.agent.openclaw') : t('agentInput.agent.gemini')}
-                                        </Text>
-                                    </Pressable>
-                                )}
-
-                                {/* Abort button */}
-                                {props.onAbort && (
-                                    <Shaker ref={shakerRef}>
-                                        <Pressable
-                                            style={(p) => ({
-                                                flexDirection: 'row',
-                                                alignItems: 'center',
-                                                borderRadius: Platform.select({ default: 16, android: 20 }),
-                                                paddingHorizontal: 8,
-                                                paddingVertical: 6,
-                                                justifyContent: 'center',
-                                                height: 32,
-                                                opacity: p.pressed ? 0.7 : 1,
-                                            })}
-                                            hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                            onPress={handleAbortPress}
-                                            disabled={isAborting}
-                                        >
-                                            {isAborting ? (
-                                                <ActivityIndicator
-                                                    size="small"
-                                                    color={theme.colors.button.secondary.tint}
-                                                />
-                                            ) : (
-                                                <Octicons
-                                                    name={"stop"}
-                                                    size={16}
-                                                    color={theme.colors.button.secondary.tint}
-                                                />
-                                            )}
-                                        </Pressable>
-                                    </Shaker>
-                                )}
-
-                                {/* Git Status Badge */}
-                                <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
-                                </View>
-
-                                {/* Send/Voice button - aligned with first row */}
-                                <View
-                                    style={[
-                                        styles.sendButton,
-                                        isSendBlocked ? styles.sendButtonLocked :
-                                        (hasText || props.isSending || (props.onMicPress && !props.isMicActive))
-                                            ? styles.sendButtonActive
-                                            : styles.sendButtonInactive
-                                    ]}
+                        {!props.zenMode && permissionSettingsGroups.length > 0 && (
+                            useNativeSettingsMenus ? (
+                                <NativeSettingsMenu groups={permissionSettingsGroups} flat style={styles.mobileIconButton}>
+                                    <View style={styles.mobileIconButton}>
+                                        <Ionicons name="settings-outline" size={20} color={theme.colors.text} />
+                                    </View>
+                                </NativeSettingsMenu>
+                            ) : (
+                                <BubblePressable
+                                    onPress={handleSettingsPress}
+                                    hitSlop={6}
+                                    style={styles.mobileIconButton}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={isCodex
+                                        ? t('agentInput.codexPermissionMode.title')
+                                        : t('agentInput.permissionMode.title')}
                                 >
-                                    <Pressable
-                                        style={(p) => ({
-                                            width: '100%',
-                                            height: '100%',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            opacity: p.pressed ? 0.7 : 1,
-                                        })}
-                                        hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                        onPress={handleSendPress}
-                                        disabled={!canPressSendButton}
+                                    <Ionicons name="settings-outline" size={20} color={theme.colors.text} />
+                                </BubblePressable>
+                            )
+                        )}
+
+                        {!props.zenMode ? (
+                            <>
+                                {useNativeSettingsMenus && modelSettingsGroup ? (
+                                    <NativeSettingsMenu groups={[modelSettingsGroup]} flat style={styles.mobileModeButton}>
+                                        <View style={styles.mobileModeButton}>
+                                            {renderModelValue()}
+                                        </View>
+                                    </NativeSettingsMenu>
+                                ) : (
+                                    <BubblePressable
+                                        onPress={handleModelPress}
+                                        disabled={!canOpenModelPicker}
+                                        hitSlop={6}
+                                        style={(p) => [
+                                            styles.mobileModeButton,
+                                            { opacity: p.pressed && canOpenModelPicker ? 0.7 : canOpenModelPicker ? 1 : 0.58 },
+                                        ]}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={t('agentInput.model.title')}
                                     >
-                                        {props.isSending ? (
-                                            <ActivityIndicator
-                                                size="small"
-                                                color={theme.colors.button.primary.tint}
-                                            />
-                                        ) : isSendBlocked ? (
-                                            <Ionicons
-                                                name="lock-closed"
-                                                size={15}
-                                                color={theme.colors.textSecondary}
-                                            />
-                                        ) : hasText ? (
-                                            <Octicons
-                                                name="arrow-up"
-                                                size={16}
-                                                color={theme.colors.button.primary.tint}
-                                                style={[
-                                                    styles.sendButtonIcon,
-                                                    { marginTop: Platform.OS === 'web' ? 2 : 0 }
-                                                ]}
-                                            />
-                                        ) : props.onMicPress && !props.isMicActive ? (
-                                            <Image
-                                                source={require('@/assets/images/icon-voice-white.png')}
-                                                style={{
-                                                    width: 24,
-                                                    height: 24,
-                                                }}
-                                                tintColor={theme.colors.button.primary.tint}
-                                            />
-                                        ) : (
-                                            <Octicons
-                                                name="arrow-up"
-                                                size={16}
-                                                color={theme.colors.button.primary.tint}
-                                                style={[
-                                                    styles.sendButtonIcon,
-                                                    { marginTop: Platform.OS === 'web' ? 2 : 0 }
-                                                ]}
-                                            />
-                                        )}
-                                    </Pressable>
-                                </View>
+                                        {renderModelValue()}
+                                    </BubblePressable>
+                                )}
+
+                                {effortSettingsGroup && (
+                                    useNativeSettingsMenus ? (
+                                        <NativeSettingsMenu groups={[effortSettingsGroup]} flat style={styles.mobileEffortButton}>
+                                            <View style={styles.mobileEffortButton}>
+                                                {renderEffortValue()}
+                                            </View>
+                                        </NativeSettingsMenu>
+                                    ) : (
+                                        <BubblePressable
+                                            onPress={handleEffortPress}
+                                            disabled={!canOpenEffortPicker}
+                                            hitSlop={6}
+                                            style={(p) => [
+                                                styles.mobileEffortButton,
+                                                { opacity: p.pressed && canOpenEffortPicker ? 0.7 : canOpenEffortPicker ? 1 : 0.58 },
+                                            ]}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={t('agentInput.effort.title')}
+                                        >
+                                            {renderEffortValue()}
+                                        </BubblePressable>
+                                    )
+                                )}
+                            </>
+                        ) : <View style={{ flex: 1 }} />}
+
+                        {!compactMobileComposer && props.agentType && props.onAgentClick && (
+                            <BubblePressable
+                                onPress={() => {
+                                    hapticsLight();
+                                    props.onAgentClick?.();
+                                }}
+                                hitSlop={6}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityLabel={props.agentType}
+                            >
+                                <Octicons name="cpu" size={14} color={theme.colors.text} />
+                            </BubblePressable>
+                        )}
+
+                        {!compactMobileComposer && (
+                            <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
+                        )}
+
+                        {props.onMicPress && (
+                            <BubblePressable
+                                onPress={handleMicrophonePress}
+                                disabled={props.isSendDisabled}
+                                hitSlop={6}
+                                style={(p) => [
+                                    styles.mobileIconButton,
+                                    { opacity: p.pressed && !props.isSendDisabled ? 0.7 : props.isSendDisabled ? 0.45 : 1 },
+                                ]}
+                                accessibilityRole="button"
+                                accessibilityLabel="Voice"
+                            >
+                                <Ionicons
+                                    name={props.isMicActive ? 'mic' : 'mic-outline'}
+                                    size={23}
+                                    color={theme.colors.text}
+                                />
+                            </BubblePressable>
+                        )}
+
+                        <Shaker ref={shakerRef}>
+                            <View
+                                style={[
+                                    styles.sendButton,
+                                    styles.mobilePrimaryButton,
+                                    isSendBlocked ? styles.sendButtonLocked
+                                        : shouldShowStopButton ? styles.mobileStopButton
+                                            : canSendMessage ? styles.mobilePrimaryButtonActive
+                                                : styles.mobilePrimaryButtonInactive,
+                                ]}
+                            >
+                                <BubblePressable
+                                    style={(p) => ({
+                                        width: '100%',
+                                        height: '100%',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        opacity: p.pressed ? 0.7 : 1,
+                                    })}
+                                    hitSlop={6}
+                                    onPress={shouldShowStopButton ? handleAbortPress : handleSendPress}
+                                    disabled={!canPressSendButton}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
+                                >
+                                    {isAborting ? (
+                                        <ActivityIndicator
+                                            size="small"
+                                            color={shouldShowStopButton && theme.dark ? '#000000' : activeSendIconColor}
+                                        />
+                                    ) : shouldShowStopButton ? (
+                                        <Octicons
+                                            name="stop"
+                                            size={16}
+                                            color={theme.dark ? '#000000' : '#FFFFFF'}
+                                        />
+                                    ) : isSendBlocked ? (
+                                        <Ionicons
+                                            name="lock-closed"
+                                            size={14}
+                                            color={theme.colors.textSecondary}
+                                        />
+                                    ) : (
+                                        <Octicons
+                                            name="arrow-up"
+                                            size={16}
+                                            color={canPressSendButton ? activeSendIconColor : theme.colors.textSecondary}
+                                            style={[
+                                                styles.sendButtonIcon,
+                                                { marginTop: Platform.OS === 'web' ? 2 : 0 },
+                                            ]}
+                                        />
+                                    )}
+                                </BubblePressable>
                             </View>
-                        </View>
+                        </Shaker>
                     </View>
-                </View>
+                    ) : desktopActionControls}
+                        </MobileGlassSurface>
+                    </View>
                 </Shaker>
             </View>
         </View>
@@ -1264,7 +2143,7 @@ function GitStatusButton({ sessionId, onPress }: { sessionId?: string, onPress?:
     }
 
     return (
-        <Pressable
+        <BubblePressable
             style={(p) => ({
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -1291,6 +2170,6 @@ function GitStatusButton({ sessionId, onPress }: { sessionId?: string, onPress?:
                     color={theme.colors.button.secondary.tint}
                 />
             )}
-        </Pressable>
+        </BubblePressable>
     );
 }

@@ -12,7 +12,7 @@
  * 4. PATH fallback: bun, pnpm, or any other package manager
  */
 
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -59,15 +59,49 @@ function resolveClaudeEntrypoint(pkgDir) {
     try {
         const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
         const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.claude;
-        if (!binRel) return null;
-        const binPath = path.join(pkgDir, binRel);
-        if (fs.existsSync(binPath)) {
-            return binPath;
+        if (binRel) {
+            const binPath = path.join(pkgDir, binRel);
+            if (fs.existsSync(binPath)) {
+                return binPath;
+            }
         }
     } catch (e) {
-        // Malformed package.json — treat as not found
+        // Malformed package.json — try the Node fallback below
+    }
+
+    // Some installations omit the platform binary (for example, when npm
+    // scripts were skipped) but retain Claude Code's Node fallback.
+    const wrapperPath = path.join(pkgDir, 'cli-wrapper.cjs');
+    if (fs.existsSync(wrapperPath)) {
+        return wrapperPath;
     }
     return null;
+}
+
+function isPlainTextWithoutShebang(filePath) {
+    try {
+        const fd = fs.openSync(filePath, 'r');
+        try {
+            const buffer = Buffer.alloc(128);
+            const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+            if (bytesRead >= 2 && buffer[0] === 0x23 && buffer[1] === 0x21) {
+                return false;
+            }
+            for (let i = 0; i < bytesRead; i++) {
+                const byte = buffer[i];
+                const isPrintableAscii = byte >= 0x20 && byte <= 0x7e;
+                const isCommonWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0d;
+                if (!isPrintableAscii && !isCommonWhitespace) {
+                    return false;
+                }
+            }
+            return bytesRead > 0;
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch (e) {
+        return false;
+    }
 }
 
 /**
@@ -114,6 +148,9 @@ function findClaudeInPath() {
             // These cannot be spawned directly by Node.js. When we find such a shim,
             // resolve to the actual cli.js in the adjacent node_modules directory.
             const isExecutable = resolvedPath.endsWith('.js') || resolvedPath.endsWith('.cjs') || resolvedPath.endsWith('.exe');
+            if (process.platform !== 'win32' && resolvedPath.endsWith('.exe') && isPlainTextWithoutShebang(resolvedPath)) {
+                return null;
+            }
             if (!isExecutable) {
                 const shimDir = path.dirname(claudePath);
                 const pkgDir = path.join(shimDir, 'node_modules', '@anthropic-ai', 'claude-code');
@@ -286,10 +323,8 @@ function findHomebrewCliPath() {
             const entries = fs.readdirSync(nodeModulesPath);
             for (const entry of entries) {
                 if (entry === 'claude-code' || entry.startsWith('.claude-code-')) {
-                    const cliPath = path.join(nodeModulesPath, entry, 'cli.js');
-                    if (fs.existsSync(cliPath)) {
-                        return cliPath;
-                    }
+                    const entrypoint = resolveClaudeEntrypoint(path.join(nodeModulesPath, entry));
+                    if (entrypoint) return entrypoint;
                 }
             }
         }
@@ -369,11 +404,9 @@ function findNativeInstallerCliPath() {
     // Check ~/.claude/local/ (older installation method)
     const nativeBasePath = path.join(homeDir, '.claude', 'local');
     if (fs.existsSync(nativeBasePath)) {
-        // Look for the cli.js in the node_modules structure
-        const cliPath = path.join(nativeBasePath, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
-        if (fs.existsSync(cliPath)) {
-            return cliPath;
-        }
+        // Look for the package entrypoint in the node_modules structure.
+        const packageEntrypoint = resolveClaudeEntrypoint(path.join(nativeBasePath, 'node_modules', '@anthropic-ai', 'claude-code'));
+        if (packageEntrypoint) return packageEntrypoint;
         
         // Alternative: direct cli.js in the installation
         const directCliPath = path.join(nativeBasePath, 'cli.js');
@@ -475,6 +508,20 @@ function getVersion(cliPath) {
             return pkg.version;
         }
     } catch (e) {}
+
+    try {
+        const isJsFile = cliPath.endsWith('.js') || cliPath.endsWith('.cjs');
+        const command = isJsFile ? process.execPath : cliPath;
+        const args = isJsFile ? [cliPath, '--version'] : ['--version'];
+        const output = execFileSync(command, args, {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 3000,
+        });
+        const match = output.match(/(\d+\.\d+\.\d+)/);
+        return match?.[1] ?? null;
+    } catch (e) {}
+
     return null;
 }
 
@@ -493,6 +540,33 @@ function compareVersions(a, b) {
         if (partsA[i] < partsB[i]) return -1;
     }
     return 0;
+}
+
+const GOAL_HOOK_JSON_VALIDATION_FIXED_VERSION = '2.1.179';
+
+function isThirdPartyAnthropicBaseUrl(value) {
+    if (!value || typeof value !== 'string' || value.trim() === '') return false;
+    try {
+        const hostname = new URL(value).hostname.toLowerCase();
+        return hostname !== 'api.anthropic.com' && !hostname.endsWith('.anthropic.com');
+    } catch (e) {
+        // A malformed non-empty override is still not the default Anthropic API.
+        return true;
+    }
+}
+
+function shouldWarnAboutGoalHookJsonValidationRisk(version, env = process.env) {
+    if (!version) return false;
+    if (!isThirdPartyAnthropicBaseUrl(env.ANTHROPIC_BASE_URL)) return false;
+    return compareVersions(version, GOAL_HOOK_JSON_VALIDATION_FIXED_VERSION) < 0;
+}
+
+function formatGoalHookJsonValidationWarning(version) {
+    return [
+        `\x1b[33mWarning:\x1b[0m Claude Code v${version} may hit /goal Stop hook JSON validation failures`,
+        `with ANTHROPIC_BASE_URL backends. Upgrade Claude Code to ${GOAL_HOOK_JSON_VALIDATION_FIXED_VERSION}+`,
+        'or use Happy remote mode with the bundled Claude Code runtime.'
+    ].join(' ');
 }
 
 /**
@@ -520,6 +594,9 @@ function getClaudeCliPath() {
     const version = getVersion(result.path);
     const versionStr = version ? ` v${version}` : '';
     console.error(`\x1b[90mUsing Claude Code${versionStr} from ${result.source}\x1b[0m`);
+    if (shouldWarnAboutGoalHookJsonValidationRisk(version)) {
+        console.error(formatGoalHookJsonValidationWarning(version));
+    }
 
     return result.path;
 }
@@ -530,8 +607,13 @@ function getClaudeCliPath() {
  */
 function runClaudeCli(cliPath) {
     const { pathToFileURL } = require('url');
-    const { spawn } = require('child_process');
-    
+    // Use cross-spawn (already a dependency, used everywhere else in this repo
+    // for the same reason) so Windows handles `.cmd`/`.bat`/extensionless npm
+    // shims correctly instead of failing with `spawn UNKNOWN` / errno -4094.
+    // For a plain `.exe` path it behaves identically to child_process.spawn.
+    // See issue #551 and the CVE-2024-27980 hardening notes elsewhere.
+    const spawn = require('cross-spawn');
+
     // Check if it's a JavaScript file (.js or .cjs) or a binary file
     const isJsFile = cliPath.endsWith('.js') || cliPath.endsWith('.cjs');
 
@@ -539,22 +621,70 @@ function runClaudeCli(cliPath) {
         // JavaScript file - use import to keep interceptors working
         const importUrl = pathToFileURL(cliPath).href;
         import(importUrl);
-    } else {
-        // Binary file (e.g., Homebrew installation) - spawn directly
-        // Note: Interceptors won't work with binary files, but that's acceptable
-        // as binary files are self-contained and don't need interception
-        const args = process.argv.slice(2);
-        const child = spawn(cliPath, args, {
-            stdio: 'inherit',
-            env: process.env
-        });
-        child.on('exit', (code) => {
-            process.exit(code || 0);
-        });
+        return;
     }
+
+    // Binary file (e.g., native installer >= 2.1.113, Homebrew). Spawn it as a
+    // child of the launcher and act as a signal trampoline.
+    //
+    // CRITICAL: when happy-cli aborts the launcher (terminal→remote switch),
+    // Node sends SIGTERM only to the immediate child (this launcher). Without
+    // signal forwarding, the spawned binary becomes an orphan adopted by init
+    // and *keeps reading the inherited TTY*. After a remote→local switch a
+    // fresh launcher + binary is spawned, so two claude binaries end up
+    // sharing the same stdin/stdout — visibly two cursors and garbled echo.
+    // (Investigation: ps showed orphan claude.exe with parent pid 1 still
+    // attached to the same pts as the live one.)
+    const args = process.argv.slice(2);
+    const child = spawn(cliPath, args, {
+        stdio: 'inherit',
+        env: process.env
+    });
+
+    let forwarded = false;
+    const forwardAndDetach = (sig) => {
+        if (forwarded) return;
+        forwarded = true;
+        try { child.kill(sig); } catch (_) { /* child may already be gone */ }
+    };
+
+    // Forward common termination signals to the spawned binary.
+    const signalsToForward = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
+    for (const sig of signalsToForward) {
+        process.on(sig, () => forwardAndDetach(sig));
+    }
+
+    // Best-effort: if the launcher process is exiting for any reason and the
+    // child is still alive, take it down too instead of leaving an orphan.
+    process.on('exit', () => {
+        if (child.exitCode === null && !child.killed) {
+            try { child.kill('SIGTERM'); } catch (_) { /* ignore */ }
+        }
+    });
+
+    child.on('exit', (code, signal) => {
+        // Mirror the binary's exit so happy-cli sees the same status. If the
+        // child exited because of a signal, re-raise it on ourselves so the
+        // parent's child.on('exit') reports a signal exit and not a clean code.
+        if (signal) {
+            try {
+                process.kill(process.pid, signal);
+                return;
+            } catch (_) {
+                // Fall through to plain exit if re-raise fails.
+            }
+        }
+        process.exit(code ?? 0);
+    });
+
+    child.on('error', (err) => {
+        console.error(err);
+        process.exit(1);
+    });
 }
 
 module.exports = {
+    resolveClaudeEntrypoint,
     findGlobalClaudeCliPath,
     findClaudeInPath,
     detectSourceFromPath,
@@ -564,7 +694,9 @@ module.exports = {
     findNativeInstallerCliPath,
     getVersion,
     compareVersions,
+    shouldWarnAboutGoalHookJsonValidationRisk,
+    formatGoalHookJsonValidationWarning,
+    GOAL_HOOK_JSON_VALIDATION_FIXED_VERSION,
     getClaudeCliPath,
     runClaudeCli
 };
-

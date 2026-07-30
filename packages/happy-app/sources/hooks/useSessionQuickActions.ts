@@ -2,21 +2,26 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, sessionArchive, sessionKill } from '@/sync/ops';
+import { machineResumeSession, sessionArchive, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
 import { Machine, Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
+import { resolveMessageModeMeta } from '@/sync/messageMeta';
 import { t } from '@/text';
 import { HappyError } from '@/utils/errors';
 import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard } from '@/utils/copySessionMetadataToClipboard';
 import { useSessionStatus } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
+import { getSessionForkSource } from '@/utils/sessionFork';
 import { useRouter } from 'expo-router';
 import { useSession } from '@/sync/storage';
+import { DuplicateSheet } from '@/components/DuplicateSheet';
+import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
+import { isRigMetadata } from '@/sync/rig';
 
 export interface SessionActionItem {
-    id: string;
+    id: SessionActionShortcutId;
     label: string;
     icon: string;
     onPress: () => void;
@@ -37,6 +42,14 @@ type ResumeAvailability = {
 };
 
 function getResumeAvailability(session: Session, machine: Machine | null | undefined, isConnected: boolean): ResumeAvailability {
+    if (isRigMetadata(session.metadata) || session.metadata?.capabilities?.resume === false) {
+        return {
+            canResume: false,
+            canShowResume: false,
+            subtitle: '',
+            message: '',
+        };
+    }
     if (isConnected) {
         return {
             canResume: false,
@@ -115,6 +128,26 @@ export function useSessionQuickActions(
         [machine, session, sessionStatus.isConnected, expResumeSession],
     );
 
+    // Fork eligibility — separate from resume because fork works on both
+    // active AND inactive provider sessions. The user-facing toggle is the same
+    // expResumeSession experiment so all three flows (resume / fork /
+    // duplicate) ride a single switch on settings/features.
+    const forkSource = React.useMemo(() => getSessionForkSource(session), [
+        session.id,
+        session.metadata?.flavor,
+        session.metadata?.machineId,
+        session.metadata?.path,
+        session.metadata?.claudeSessionId,
+        session.metadata?.codexThreadId,
+    ]);
+    const canFork = Boolean(
+        expResumeSession
+        && !isRigMetadata(session.metadata)
+        && forkSource
+        && machine
+        && isMachineOnline(machine),
+    );
+
     const openDetails = React.useCallback(() => {
         router.push(`/session/${session.id}/info`);
     }, [router, session.id]);
@@ -146,11 +179,12 @@ export function useSessionQuickActions(
             throw new HappyError(t('sessionInfo.resumeSessionMissingMachine'), false);
         }
 
+        const modeMeta = resolveMessageModeMeta(session, storage.getState().settings);
         const result = await machineResumeSession({
             machineId,
             sessionId: session.id,
-            model: session.modelMode ?? undefined,
-            permissionMode: session.permissionMode ?? undefined,
+            model: modeMeta.model ?? undefined,
+            permissionMode: modeMeta.permissionMode,
         });
 
         switch (result.type) {
@@ -160,11 +194,10 @@ export function useSessionQuickActions(
                 await sync.refreshSessions();
 
                 if (session.permissionMode) {
-                    storage.getState().updateSessionPermissionMode(result.sessionId, session.permissionMode);
+                    sessionSetAgentModes(result.sessionId, { permissionMode: session.permissionMode });
                 }
-                if (session.modelMode) {
-                    storage.getState().updateSessionModelMode(result.sessionId, session.modelMode);
-                }
+                // Model / effort picks survive resume on their own — they live
+                // in the session's synced metadata (#1492).
 
                 navigateToSession(result.sessionId);
                 return;
@@ -195,6 +228,35 @@ export function useSessionQuickActions(
         performResume();
     }, [performResume]);
 
+    // Fork the session (no truncation) — copies the on-disk Claude JSONL
+    // and spawns a fresh Happy session on the same machine. Works for
+    // both active and inactive sessions; the source row stays untouched.
+    const [forking, performFork] = useHappyAction(async () => {
+        if (!canFork) {
+            throw new HappyError(t('session.forkErrorMissingMetadata'), false);
+        }
+        if (!forkSource) {
+            throw new HappyError(t('session.forkErrorMissingMetadata'), false);
+        }
+        const result = await forkAndSpawn(forkSource as ForkSource);
+        if (result.type !== 'success') {
+            throw new HappyError(result.type === 'error' ? result.errorMessage : t('session.forkErrorGeneric'), false);
+        }
+        navigateToSession(result.sessionId);
+    });
+
+    const forkSession = React.useCallback(() => {
+        performFork();
+    }, [performFork]);
+
+    const openDuplicateSheet = React.useCallback(() => {
+        if (!canFork) return;
+        Modal.show({
+            component: DuplicateSheet,
+            props: { sessionId: session.id },
+        } as any);
+    }, [canFork, session.id]);
+
     const canCopySessionMetadata = __DEV__ || devModeEnabled;
 
     const actionItems = React.useMemo<SessionActionItem[]>(() => {
@@ -204,6 +266,11 @@ export function useSessionQuickActions(
 
         if (resumeAvailability.canShowResume) {
             items.push({ id: 'resume', icon: 'play-circle-outline', label: t('sessionInfo.resumeSession'), onPress: resumeSession });
+        }
+
+        if (canFork) {
+            items.push({ id: 'fork', icon: 'git-branch-outline', label: t('session.forkAction'), onPress: forkSession });
+            items.push({ id: 'duplicate', icon: 'time-outline', label: t('session.duplicateAction'), onPress: openDuplicateSheet });
         }
 
         if (canCopySessionMetadata) {
@@ -217,9 +284,13 @@ export function useSessionQuickActions(
     }, [
         archiveSession,
         canCopySessionMetadata,
+        canFork,
         copySessionMetadata,
         copySessionMetadataAndLogs,
+        forkSource,
+        forkSession,
         openDetails,
+        openDuplicateSheet,
         resumeAvailability.canShowResume,
         resumeSession,
     ]);
@@ -243,9 +314,13 @@ export function useSessionQuickActions(
         canCopySessionMetadata,
         canResume: resumeAvailability.canResume,
         canShowResume: resumeAvailability.canShowResume,
+        canFork,
         copySessionMetadata,
         copySessionMetadataAndLogs,
+        forkSession,
+        forking,
         openDetails,
+        openDuplicateSheet,
         resumeSession,
         resumeSessionSubtitle: resumeAvailability.subtitle,
         resumingSession,

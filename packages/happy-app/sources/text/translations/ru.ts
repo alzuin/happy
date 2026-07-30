@@ -147,6 +147,27 @@ export const ru: TranslationStructure = {
             light: 'Всегда использовать светлую тему',
             dark: 'Всегда использовать тёмную тему',
         },
+        chat: 'Чат',
+        chatDescription: 'Настройте внешний вид сообщений в чате',
+        sessionStatusBar: 'Информация о сессии',
+        sessionStatusBarDescription: 'Выберите, где показывать ветку, модель, усилия и контекст',
+        sessionStatusDisplayOptions: {
+            hidden: 'Скрыто',
+            above: 'Над полем ввода',
+            below: 'Под полем ввода',
+        },
+        usageLimitShowRemaining: 'Показывать остаток',
+        usageLimitShowRemainingDescription: 'Индикаторы лимита отсчитывают остаток, а не использование',
+        userMessageBubbleColor: 'Цвет ваших сообщений',
+        userMessageBubbleColorDescription: 'Сделайте ваши сообщения заметнее в длинных чатах',
+        userMessageBubbleColorOptions: {
+            blue: 'Синий',
+            green: 'Зелёный',
+            purple: 'Фиолетовый',
+            rose: 'Розовый',
+            sand: 'Песочный',
+            gray: 'Серый',
+        },
         display: 'Отображение',
         displayDescription: 'Управление макетом и интервалами',
         inlineToolCalls: 'Встроенные вызовы инструментов',
@@ -197,11 +218,15 @@ export const ru: TranslationStructure = {
         markdownCopyV2Subtitle: 'Долгое нажатие открывает модальное окно копирования',
         hideInactiveSessions: 'Скрывать неактивные сессии',
         hideInactiveSessionsSubtitle: 'Показывать в списке только активные чаты',
+        groupToolCalls: 'Группировать вызовы инструментов',
+        groupToolCallsSubtitle: 'Сворачивать подряд идущие вызовы инструментов в один блок',
         privacy: 'Конфиденциальность',
         privacyDescription: 'Полностью отключает всю аналитику и телеметрию. Никакие данные не будут отправляться в PostHog или другие сервисы отслеживания.',
         disableAnalytics: 'Отключить аналитику',
         analyticsDisabled: 'Вся аналитика и телеметрия отключены',
         analyticsEnabled: 'Анонимная аналитика использования активна',
+        imageUpload: 'Загрузка изображений',
+        imageUploadSubtitle: 'Прикрепляйте изображения к сообщениям для анализа поддерживаемыми агентами',
     },
 
     errors: {
@@ -364,6 +389,21 @@ export const ru: TranslationStructure = {
             scanQrCode: 'Отсканируйте QR-код',
             openCamera: 'Открыть камеру',
         },
+        agentGoalBar: {
+            currentGoal: 'Текущая цель',
+            accessibilityLabel: ({ goal }: { goal: string }) => `Текущая цель: ${goal}`,
+            clearGoal: 'Очистить цель',
+            stopGoal: 'Остановить цель',
+            editGoal: 'Изменить цель',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Контекст ${used} из ${total} токенов, ${percent}%`,
+            limitFiveHour: 'Лимит 5 часов',
+            limitSevenDay: 'Лимит 7 дней',
+            limitResets: ({ time }: { time: string }) => `сброс ${time}`,
+            limitAsOf: ({ age }: { age: string }) => `данные ${age} назад`,
+            limitRemaining: ({ percent }: { percent: number }) => `осталось ${percent}%`,
+        },
     },
 
     profile: {
@@ -387,18 +427,40 @@ export const ru: TranslationStructure = {
         permissionRequired: 'требуется разрешение',
         activeNow: 'Активен сейчас',
         unknown: 'неизвестно',
+        unread: 'новые результаты',
     },
 
     time: {
         justNow: 'только что',
         minutesAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'минуту', few: 'минуты', many: 'минут' })} назад`,
         hoursAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'час', few: 'часа', many: 'часов' })} назад`,
+        daysAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'день', few: 'дня', many: 'дней' })} назад`,
     },
 
     session: {
         inputPlaceholder: 'Введите сообщение...',
         inactiveArchived: 'Эта сессия неактивна.',
         resumeFromTerminal: 'Чтобы возобновить её из терминала:',
+        newChat: 'Новый чат',
+        statusBarContext: 'Контекст',
+        statusBarPathTitle: 'Рабочая директория',
+        forkAction: 'Форкнуть сессию',
+        forkSubtitle: 'Продолжить в новой сессии с тем же контекстом',
+        duplicateAction: 'Откатиться к сообщению…',
+        duplicateSubtitle: 'Вернуться к выбранной точке и попробовать иначе',
+        forkFromHere: 'Форкнуть отсюда',
+        duplicateSheetTitle: 'Выберите точку отката',
+        duplicateSheetSubtitle: 'Новая сессия сохранит выбранный ход целиком (ваше сообщение и ответ агента) и отбросит все следующие запросы.',
+        duplicateSheetConfirm: 'Откатить',
+        duplicateSheetEmpty: 'В этой сессии пока нет сообщений, к которым можно откатиться.',
+        duplicateRowDisabled: 'К этому сообщению нельзя откатиться.',
+        forkedFromLabel: 'Форкнуто из',
+        forkedFromSubtitle: 'Открыть исходную сессию, из которой сделан форк',
+        forkErrorOffline: 'Машина оффлайн. Форк доступен, только пока машина с сессией онлайн.',
+        forkErrorMissingUuid: 'Выбранная точка отката больше не существует в исходной сессии — попробуйте форк без обрезки.',
+        forkErrorMissingMetadata: 'Не хватает метаданных сессии для форка.',
+        forkErrorGeneric: 'Не удалось форкнуть сессию.',
+        forkClaudeOnly: 'Форк сейчас поддерживается только для Claude-сессий.',
     },
 
     commandPalette: {
@@ -436,6 +498,10 @@ export const ru: TranslationStructure = {
             readOnly: 'Read Only Mode',
             safeYolo: 'Safe YOLO',
             yolo: 'YOLO',
+            defaultDescription: 'спрашивать перед недоверенными командами',
+            readOnlyDescription: 'без записи',
+            safeYoloDescription: 'без запросов, песочница рабочей папки',
+            yoloDescription: 'без запросов, полный доступ',
             badgeReadOnly: 'Только чтение',
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
@@ -481,11 +547,28 @@ export const ru: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: 'Показать архив',
         hideArchived: 'Скрыть архив',
+        newSession: 'Новая сессия',
+    },
+
+    zen: {
+        toggle: 'Дзен-режим',
     },
 
     toolView: {
         input: 'Входные данные',
         output: 'Результат',
+    },
+
+    toolGroup: {
+        editedFile: 'Отредактированный файл',
+        editedFiles: ({ count }: { count: number }) => `${plural({ count, one: 'Отредактирован', few: 'Отредактировано', many: 'Отредактировано' })} ${count} ${plural({ count, one: 'файл', few: 'файла', many: 'файлов' })}`,
+        readFiles: ({ count }: { count: number }) => `${plural({ count, one: 'Прочитан', few: 'Прочитано', many: 'Прочитано' })} ${count} ${plural({ count, one: 'файл', few: 'файла', many: 'файлов' })}`,
+        ranCommands: ({ count }: { count: number }) => `${plural({ count, one: 'Выполнена', few: 'Выполнено', many: 'Выполнено' })} ${count} ${plural({ count, one: 'команда', few: 'команды', many: 'команд' })}`,
+        searched: ({ count }: { count: number }) => `${plural({ count, one: 'Выполнен', few: 'Выполнено', many: 'Выполнено' })} ${count} ${plural({ count, one: 'поиск', few: 'поиска', many: 'поисков' })}`,
+        fetchedUrls: ({ count }: { count: number }) => `${plural({ count, one: 'Загружен', few: 'Загружено', many: 'Загружено' })} ${count} URL`,
+        ranTasks: ({ count }: { count: number }) => `${plural({ count, one: 'Выполнена', few: 'Выполнено', many: 'Выполнено' })} ${count} ${plural({ count, one: 'задача', few: 'задачи', many: 'задач' })}`,
+        usedTools: ({ count }: { count: number }) => `${plural({ count, one: 'Использован', few: 'Использовано', many: 'Использовано' })} ${count} ${plural({ count, one: 'инструмент', few: 'инструмента', many: 'инструментов' })}`,
+        workedFor: ({ duration }: { duration: string }) => `Работало ${duration}`,
     },
 
     tools: {
@@ -580,6 +663,31 @@ export const ru: TranslationStructure = {
         noChangesTitle: 'Нет изменений',
         noChangesSubtitle: 'Рабочее дерево чистое',
         deleted: 'Удалён',
+        changedFiles: ({ count }: { count: number }) => `${count} ${count === 1 ? 'изменённый файл' : count < 5 ? 'изменённых файла' : 'изменённых файлов'}`,
+        allFiles: 'Все файлы',
+        addPanel: 'Добавить панель',
+        closePanel: 'Закрыть панель',
+        editFile: 'Редактировать',
+        saveFile: 'Сохранить',
+        failedToRead: 'Не удалось прочитать файл',
+        failedToSave: 'Не удалось сохранить файл',
+        fileConflict: 'Конфликт файла',
+        fileConflictDescription: 'Файл был изменён на устройстве пока вы его редактировали. Перезагрузите чтобы увидеть актуальную версию.',
+        reload: 'Перезагрузить',
+        overwrite: 'Перезаписать',
+    },
+    sideChat: {
+        panelTitle: 'Боковой чат',
+        emptyTitle: 'Начните боковой чат',
+        emptySubtitle: 'Спросите агента что-нибудь в стороне. Он наследует контекст этого чата, но остаётся изолированным — ничто здесь не затрагивает основной разговор.',
+        startButton: 'Начать боковой чат',
+        creating: 'Запуск бокового чата…',
+        unavailable: 'Эта сессия пока не может начать боковой чат — дождитесь, когда агент выйдет в сеть.',
+        composerPlaceholder: 'Написать в боковой чат…',
+        expand: 'Открыть на весь экран',
+        tabLabel: ({ index }: { index: number }) => `Боковой чат ${index}`,
+        newChat: 'Новый боковой чат',
+        close: 'Закрыть боковой чат',
     },
 
     settingsVoice: {
@@ -790,6 +898,7 @@ export const ru: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `Переключено в режим ${mode}`,
         unknownEvent: 'Неизвестное событие',
         usageLimitUntil: ({ time }: { time: string }) => `Лимит использования достигнут до ${time}`,
+        sentAsGoal: 'Отправлено в качестве цели',
         unknownTime: 'неизвестное время',
     },
 
@@ -944,6 +1053,21 @@ export const ru: TranslationStructure = {
         usageOverTime: 'Использование во времени',
         byModel: 'По модели',
         noData: 'Данные об использовании недоступны',
+    },
+
+    imageUpload: {
+        permissionTitle: 'Доступ к библиотеке фото',
+        permissionMessage: 'Разрешите доступ к вашей библиотеке фото, чтобы прикреплять изображения к сообщениям.',
+        limitTitle: 'Достигнут лимит изображений',
+        limitMessage: ({ max }: { max: number }) => `Можно прикрепить не более ${max} изображений на сообщение.`,
+        fileTooLargeTitle: 'Файл слишком большой',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}" превышает лимит ${maxMb}МБ и не был добавлен.`,
+        uploadFailedTitle: 'Ошибка загрузки',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? 'Одно изображение не удалось загрузить — оно не было отправлено.'
+            : `${count} изображений не удалось загрузить — они не были отправлены.`,
+        notSupportedTitle: 'Изображения не поддерживаются',
+        notSupportedMessage: 'Этот агент не поддерживает вложения изображений. Изображения не были отправлены.',
     },
 
     feed: {

@@ -9,8 +9,9 @@ function useDeepEqual<T>(selector: (state: StorageState) => T): (state: StorageS
         return equal(prev.current, next) ? prev.current! : (prev.current = next);
     };
 }
-import { Session, Machine, GitStatus } from "./storageTypes";
+import { Session, Machine, GitStatus, SessionAgentModesPatch } from "./storageTypes";
 import type { GitStatusFiles } from "./gitStatusFiles";
+import type { ProjectFilesList } from "./projectFiles";
 import { createReducer, reducer, ReducerState } from "./reducer/reducer";
 import { Message } from "./typesMessage";
 import { NormalizedMessage } from "./typesRaw";
@@ -21,16 +22,18 @@ import { LocalSettings, applyLocalSettings } from "./localSettings";
 import { Purchases, customerInfoToPurchases } from "./purchases";
 import { Profile } from "./profile";
 import { UserProfile, RelationshipUpdatedEvent } from "./friendTypes";
-import { loadSettings, loadLocalSettings, saveLocalSettings, saveSettings, loadPurchases, savePurchases, loadProfile, saveProfile, loadSessionDrafts, saveSessionDrafts, loadSessionPermissionModes, saveSessionPermissionModes, loadSessionModelModes, saveSessionModelModes, loadSessionEffortLevels, saveSessionEffortLevels } from "./persistence";
-import type { PermissionModeKey } from '@/components/PermissionModeSelector';
+import { loadSettings, loadLocalSettings, saveLocalSettings, saveSettings, loadPurchases, savePurchases, loadProfile, saveProfile, loadSessionDrafts, saveSessionDrafts } from "./persistence";
+import { isAgentModePushPending } from "./agentModesPending";
+import { loadSessionLastMessageSentAt, saveSessionLastMessageSentAt } from "./persistence";
 import type { CustomerInfo } from './revenueCat/types';
 import React from "react";
 import { sync } from "./sync";
 import { getCurrentRealtimeSessionId, getVoiceSession } from '@/realtime/RealtimeSession';
 import { isMutableTool } from "@/components/tools/knownTools";
-import { projectManager } from "./projectManager";
 import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
+import { getRigActivityIndicators, getRigIdentity } from './rig';
+import { indexSessionsById } from './sessionIdentity';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,11 +56,6 @@ function isSessionActive(session: { active: boolean; activeAt: number }): boolea
     return session.active;
 }
 
-function isSandboxEnabled(metadata: Session['metadata'] | null | undefined): boolean {
-    const sandbox = metadata?.sandbox;
-    return !!sandbox && typeof sandbox === 'object' && (sandbox as { enabled?: unknown }).enabled === true;
-}
-
 // Known entitlement IDs
 export type KnownEntitlements = 'pro';
 
@@ -66,6 +64,15 @@ interface SessionMessages {
     messagesMap: Record<string, Message>;
     reducerState: ReducerState;
     isLoaded: boolean;
+    // True when the server reported more older messages exist beyond the
+    // oldest one we currently have. Drives the "load older" affordance in
+    // the chat list. Defaults to false until the initial fetch resolves —
+    // the UI must not show a stale paginate-up spinner before that.
+    hasMoreOlder: boolean;
+    // True while a backward (older-history) page is in flight. Used by the
+    // chat list to render a loading footer at the top of the inverted list
+    // and to suppress duplicate triggers from FlatList onEndReached.
+    isLoadingOlder: boolean;
 }
 
 // Machine type is now imported from storageTypes - represents persisted machine data
@@ -77,6 +84,11 @@ export interface SessionRowData {
     subtitle: string;
     avatarId: string;
     flavor: string | null;
+    clientId: string | null;
+    identityLine: string | null;
+    providerKind: string | null;
+    modelName: string | null;
+    activitySummary: string | null;
     state: SessionState;
     // Only present on inactive sessions — active sessions never show "last seen"
     // and activeAt updates on every heartbeat, causing needless deep-equal diffs
@@ -89,9 +101,10 @@ export interface SessionRowData {
     homeDir: string | null;
     completedTodosCount: number;
     totalTodosCount: number;
+    hasUnread: boolean;
 }
 
-function buildSessionRowData(session: Session): SessionRowData {
+function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): SessionRowData {
     const isOnline = session.presence === "online";
     const hasPermissions = !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
 
@@ -106,12 +119,21 @@ function buildSessionRowData(session: Session): SessionRowData {
         state = 'waiting';
     }
 
+    const rigIdentity = getRigIdentity(session.metadata);
+    const rigActivity = getRigActivityIndicators(session.metadata);
     return {
         id: session.id,
         name: getSessionName(session),
         subtitle: getSessionSubtitle(session),
         avatarId: getSessionAvatarId(session),
         flavor: session.metadata?.flavor ?? null,
+        clientId: session.metadata?.client?.id ?? null,
+        identityLine: rigIdentity ? `${rigIdentity.clientName} · ${rigIdentity.providerName}` : null,
+        providerKind: session.metadata?.provider?.kind ?? null,
+        modelName: rigIdentity?.modelName ?? null,
+        activitySummary: rigActivity.length > 0
+            ? rigActivity.map((item) => `${item.count}${item.queued ? `+${item.queued}` : ''} ${item.key}`).join(' · ')
+            : null,
         state,
         ...(!session.active && { activeAt: session.activeAt, createdAt: session.createdAt }),
         hasDraft: !!session.draft,
@@ -121,6 +143,7 @@ function buildSessionRowData(session: Session): SessionRowData {
         homeDir: session.metadata?.homeDir ?? null,
         completedTodosCount: session.todos?.filter(todo => todo.status === 'completed').length ?? 0,
         totalTodosCount: session.todos?.length ?? 0,
+        hasUnread: unreadSessionIds?.has(session.id) ?? false,
     };
 }
 
@@ -145,8 +168,9 @@ interface StorageState {
     sessionsData: SessionListItem[] | null;  // Legacy - to be removed
     sessionListViewData: SessionListViewItem[] | null;
     sessionMessages: Record<string, SessionMessages>;
-    sessionGitStatus: Record<string, GitStatus | null>;
-    sessionGitStatusFiles: Record<string, GitStatusFiles | null>;
+    pathGitStatus: Record<string, GitStatus | null>;        // keyed by "machineId:path"
+    pathGitStatusFiles: Record<string, GitStatusFiles | null>; // keyed by "machineId:path"
+    pathProjectFiles: Record<string, ProjectFilesList | null>;  // keyed by "machineId:path"
     sessionFileCache: Record<string, Record<string, { content: string | null; diff: string | null; isBinary: boolean; cachedAt: number }>>;
     machines: Record<string, Machine>;
     artifacts: Record<string, DecryptedArtifact>;  // New artifacts storage
@@ -171,15 +195,19 @@ interface StorageState {
     deleteMachine: (machineId: string) => void;
     applyLoaded: () => void;
     applyReady: () => void;
-    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean };
+    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean, enteredPlanMode: boolean };
     applyMessagesLoaded: (sessionId: string) => void;
+    applyOlderMessagesPagination: (sessionId: string, info: { hasMore: boolean }) => void;
+    applyOlderMessagesLoading: (sessionId: string, isLoading: boolean) => void;
     applySettings: (settings: Settings, version: number) => void;
     applySettingsLocal: (settings: Partial<Settings>) => void;
     applyLocalSettings: (settings: Partial<LocalSettings>) => void;
     applyPurchases: (customerInfo: CustomerInfo) => void;
     applyProfile: (profile: Profile) => void;
-    applyGitStatus: (sessionId: string, status: GitStatus | null) => void;
-    applyGitStatusFiles: (sessionId: string, files: GitStatusFiles | null) => void;
+    applyGitStatus: (pathKey: string, status: GitStatus | null) => void;
+    applyGitStatusFiles: (pathKey: string, files: GitStatusFiles | null) => void;
+    applyProjectFiles: (pathKey: string, files: ProjectFilesList | null) => void;
+    getSessionPathKey: (sessionId: string) => string | null;
     applyFileCache: (sessionId: string, filePath: string, content: string | null, diff: string | null, isBinary: boolean) => void;
     applyNativeUpdateStatus: (status: { available: boolean; updateUrl?: string } | null) => void;
     isMutableToolCall: (sessionId: string, callId: string) => boolean;
@@ -190,24 +218,14 @@ interface StorageState {
     setSocketStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'error') => void;
     getActiveSessions: () => Session[];
     updateSessionDraft: (sessionId: string, draft: string | null) => void;
-    updateSessionPermissionMode: (sessionId: string, mode: string) => void;
-    updateSessionModelMode: (sessionId: string, mode: string) => void;
-    updateSessionEffortLevel: (sessionId: string, level: string) => void;
+    updateSessionAgentModes: (sessionId: string, patch: SessionAgentModesPatch) => void;
+    markSessionMessageSent: (sessionId: string) => void;
     // Artifact methods
     applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
     addArtifact: (artifact: DecryptedArtifact) => void;
     updateArtifact: (artifact: DecryptedArtifact) => void;
     deleteArtifact: (artifactId: string) => void;
     deleteSession: (sessionId: string) => void;
-    // Project management methods
-    getProjects: () => import('./projectManager').Project[];
-    getProject: (projectId: string) => import('./projectManager').Project | null;
-    getProjectForSession: (sessionId: string) => import('./projectManager').Project | null;
-    getProjectSessions: (projectId: string) => string[];
-    // Project git status methods
-    getProjectGitStatus: (projectId: string) => import('./storageTypes').GitStatus | null;
-    getSessionProjectGitStatus: (sessionId: string) => import('./storageTypes').GitStatus | null;
-    updateSessionProjectGitStatus: (sessionId: string, status: import('./storageTypes').GitStatus | null) => void;
     // Friend management methods
     applyFriends: (friends: UserProfile[]) => void;
     applyRelationshipUpdate: (event: RelationshipUpdatedEvent) => void;
@@ -220,17 +238,31 @@ interface StorageState {
     // Feed methods
     applyFeedItems: (items: FeedItem[]) => void;
     clearFeed: () => void;
+    // Unread session tracking (memory-only)
+    unreadSessionIds: Set<string>;
+    currentViewingSessionId: string | null;
+    markSessionRead: (sessionId: string) => void;
+    markSessionUnread: (sessionId: string) => void;
+    setCurrentViewingSession: (sessionId: string | null) => void;
 }
 
 // Helper function to build unified list view data from sessions and machines
 function buildSessionListViewData(
-    sessions: Record<string, Session>
+    sessions: Record<string, Session>,
+    // Required on purpose: an omitted set silently rebuilds the list with
+    // hasUnread=false everywhere — exactly the bug this parameter caused twice.
+    unreadSessionIds: Set<string>,
 ): SessionListViewItem[] {
     // Separate active and inactive sessions
     const activeSessions: Session[] = [];
     const inactiveSessions: Session[] = [];
 
     Object.values(sessions).forEach(session => {
+        // Side chats are hidden children of another session — they render only
+        // inside the parent's sidebar panel, never in the top-level list.
+        if (session.metadata?.isSideChat) {
+            return;
+        }
         if (isSessionActive(session)) {
             activeSessions.push(session);
         } else {
@@ -238,16 +270,22 @@ function buildSessionListViewData(
         }
     });
 
-    // Sort by creation date (newest first) — matches applySessions behavior
-    activeSessions.sort((a, b) => b.createdAt - a.createdAt);
-    inactiveSessions.sort((a, b) => b.createdAt - a.createdAt);
+    // Sort by last activity or creation date (newest first), per user setting — matches applySessions behavior
+    // Activity sort keys off the last user-sent message, not updatedAt: updatedAt
+    // bumps on every background agent update, which would make the list jump while
+    // several sessions stream at once. lastMessageSentAt only moves when the user acts.
+    const sortKey = storage.getState().settings.sortSessionsByActivity
+        ? (s: Session) => s.lastMessageSentAt ?? s.createdAt
+        : (s: Session) => s.createdAt;
+    activeSessions.sort((a, b) => sortKey(b) - sortKey(a));
+    inactiveSessions.sort((a, b) => sortKey(b) - sortKey(a));
 
     // Build unified list view data
     const listData: SessionListViewItem[] = [];
 
     // Add active sessions as a single item at the top (if any)
     if (activeSessions.length > 0) {
-        listData.push({ type: 'active-sessions', sessions: activeSessions.map(buildSessionRowData) });
+        listData.push({ type: 'active-sessions', sessions: activeSessions.map(s => buildSessionRowData(s, unreadSessionIds)) });
     }
 
     // Group inactive sessions by date
@@ -259,7 +297,7 @@ function buildSessionListViewData(
     let currentDateString: string | null = null;
 
     for (const session of inactiveSessions) {
-        const sessionDate = new Date(session.createdAt);
+        const sessionDate = new Date(sortKey(session));
         const dateString = sessionDate.toDateString();
 
         if (currentDateString !== dateString) {
@@ -281,7 +319,7 @@ function buildSessionListViewData(
 
                 listData.push({ type: 'header', title: headerTitle });
                 currentDateGroup.forEach(sess => {
-                    listData.push({ type: 'session', session: buildSessionRowData(sess) });
+                    listData.push({ type: 'session', session: buildSessionRowData(sess, unreadSessionIds) });
                 });
             }
 
@@ -311,7 +349,7 @@ function buildSessionListViewData(
 
         listData.push({ type: 'header', title: headerTitle });
         currentDateGroup.forEach(sess => {
-            listData.push({ type: 'session', session: buildSessionRowData(sess) });
+            listData.push({ type: 'session', session: buildSessionRowData(sess, unreadSessionIds) });
         });
     }
 
@@ -324,9 +362,7 @@ export const storage = create<StorageState>()((set, get) => {
     let purchases = loadPurchases();
     let profile = loadProfile();
     let sessionDrafts = loadSessionDrafts();
-    let sessionPermissionModes = loadSessionPermissionModes();
-    let sessionModelModes = loadSessionModelModes();
-    let sessionEffortLevels = loadSessionEffortLevels();
+    let sessionLastMessageSentAt = loadSessionLastMessageSentAt();
     return {
         settings,
         settingsVersion: version,
@@ -347,8 +383,9 @@ export const storage = create<StorageState>()((set, get) => {
         sessionsData: null,  // Legacy - to be removed
         sessionListViewData: null,
         sessionMessages: {},
-        sessionGitStatus: {},
-        sessionGitStatusFiles: {},
+        pathGitStatus: {},
+        pathGitStatusFiles: {},
+        pathProjectFiles: {},
         sessionFileCache: {},
         realtimeStatus: 'disconnected',
         realtimeMode: 'idle',
@@ -358,6 +395,8 @@ export const storage = create<StorageState>()((set, get) => {
         socketLastDisconnectedAt: null,
         isDataReady: false,
         nativeUpdateStatus: null,
+        unreadSessionIds: new Set<string>(),
+        currentViewingSessionId: null,
         isMutableToolCall: (sessionId: string, callId: string) => {
             const sessionMessages = get().sessionMessages[sessionId];
             if (!sessionMessages) {
@@ -378,39 +417,45 @@ export const storage = create<StorageState>()((set, get) => {
             return Object.values(state.sessions).filter(s => s.active);
         },
         applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: "online" | number })[]) => set((state) => {
-            // Load drafts and permission modes if sessions are empty (initial load)
+            // Load drafts if sessions are empty (initial load)
             const isInitialLoad = Object.keys(state.sessions).length === 0;
             const savedDrafts = isInitialLoad ? sessionDrafts : {};
-            const savedPermissionModes = isInitialLoad ? sessionPermissionModes : {};
-            const savedModelModes = isInitialLoad ? sessionModelModes : {};
-            const savedEffortLevels = isInitialLoad ? sessionEffortLevels : {};
+            const savedLastMessageSentAt = isInitialLoad ? sessionLastMessageSentAt : {};
 
             // Merge new sessions with existing ones
-            const mergedSessions: Record<string, Session> = { ...state.sessions };
+            const mergedSessions: Record<string, Session> = indexSessionsById(Object.values(state.sessions));
 
             // Update sessions with calculated presence using centralized resolver
             sessions.forEach(session => {
                 // Use centralized resolver for consistent state management
                 const presence = resolveSessionOnlineState(session);
 
-                // Preserve existing draft and permission mode if they exist, or load from saved data
+                // Drafts stay device-local; missing/null means "no draft".
                 const existingDraft = state.sessions[session.id]?.draft;
                 const savedDraft = savedDrafts[session.id];
-                const existingPermissionMode = state.sessions[session.id]?.permissionMode;
-                const savedPermissionMode = savedPermissionModes[session.id];
-                const defaultPermissionMode: PermissionModeKey = isSandboxEnabled(session.metadata) ? 'bypassPermissions' : 'default';
-                const resolvedPermissionMode: PermissionModeKey =
-                    (existingPermissionMode && existingPermissionMode !== 'default' ? existingPermissionMode : undefined) ||
-                    (savedPermissionMode && savedPermissionMode !== 'default' ? savedPermissionMode : undefined) ||
-                    (session.permissionMode && session.permissionMode !== 'default' ? session.permissionMode : undefined) ||
-                    defaultPermissionMode;
 
-                // Restore model mode / effort level from MMKV on first load — server
-                // does not sync these, and they used to reset on every app restart (#1028).
-                const existingModelMode = state.sessions[session.id]?.modelMode;
-                const resolvedModelMode = existingModelMode ?? savedModelModes[session.id] ?? session.modelMode ?? null;
-                const existingEffortLevel = state.sessions[session.id]?.effortLevel;
-                const resolvedEffortLevel = existingEffortLevel ?? savedEffortLevels[session.id] ?? session.effortLevel ?? null;
+                // Permission / model / effort picks sync through session
+                // metadata (#1492). A metadata value (including explicit
+                // null = reset) wins over the local mirror, EXCEPT while an
+                // optimistic push for the field is still in flight — inbound
+                // events then still carry the OLD metadata, and applying it
+                // would bounce the fresh local pick back. Metadata without
+                // the field keeps the local value.
+                const resolveModePick = (field: 'permissionMode' | 'modelMode' | 'effortLevel'): string | null => {
+                    const existing = state.sessions[session.id]?.[field] ?? null;
+                    if (isAgentModePushPending(session.id, field)) {
+                        return existing;
+                    }
+                    return session.metadata && session.metadata[field] !== undefined
+                        ? session.metadata[field] ?? null
+                        : existing;
+                };
+                const resolvedPermissionMode = resolveModePick('permissionMode');
+                const resolvedModelMode = resolveModePick('modelMode');
+                const resolvedEffortLevel = resolveModePick('effortLevel');
+
+                // Local activity timestamp — preserve in-memory value, else restore from MMKV.
+                const resolvedLastMessageSentAt = state.sessions[session.id]?.lastMessageSentAt ?? savedLastMessageSentAt[session.id];
 
                 mergedSessions[session.id] = {
                     ...session,
@@ -419,6 +464,7 @@ export const storage = create<StorageState>()((set, get) => {
                     permissionMode: resolvedPermissionMode,
                     modelMode: resolvedModelMode,
                     effortLevel: resolvedEffortLevel,
+                    lastMessageSentAt: resolvedLastMessageSentAt,
                 };
             });
 
@@ -436,6 +482,10 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Process all sessions from merged set
             Object.values(mergedSessions).forEach(session => {
+                // Side chats are hidden children — never in any session list.
+                if (session.metadata?.isSideChat) {
+                    return;
+                }
                 if (activeSet.has(session.id)) {
                     activeSessions.push(session);
                 } else {
@@ -443,9 +493,12 @@ export const storage = create<StorageState>()((set, get) => {
                 }
             });
 
-            // Sort both arrays by creation date for stable ordering
-            activeSessions.sort((a, b) => b.createdAt - a.createdAt);
-            inactiveSessions.sort((a, b) => b.createdAt - a.createdAt);
+            // Sort both arrays by last activity or creation date (newest first), per user setting
+            const sortKey = get().settings.sortSessionsByActivity
+                ? (s: Session) => s.lastMessageSentAt ?? s.createdAt
+                : (s: Session) => s.createdAt;
+            activeSessions.sort((a, b) => sortKey(b) - sortKey(a));
+            inactiveSessions.sort((a, b) => sortKey(b) - sortKey(a));
 
             // Build flat list data for FlashList
             const listData: SessionListItem[] = [];
@@ -525,7 +578,9 @@ export const storage = create<StorageState>()((set, get) => {
                         messages: messagesArray,
                         messagesMap: mergedMessagesMap,
                         reducerState: existingSessionMessages.reducerState, // The reducer modifies state in-place, so this has the updates
-                        isLoaded: existingSessionMessages.isLoaded
+                        isLoaded: existingSessionMessages.isLoaded,
+                        hasMoreOlder: existingSessionMessages.hasMoreOlder,
+                        isLoadingOlder: existingSessionMessages.isLoadingOlder
                     };
 
                     // IMPORTANT: Copy latestUsage from reducerState to Session for immediate availability
@@ -538,26 +593,41 @@ export const storage = create<StorageState>()((set, get) => {
                 }
             });
 
-            // Build new unified list view data
-            const sessionListViewData = buildSessionListViewData(
-                mergedSessions
-            );
-
-            // Update project manager with current sessions and machines
-            const machineMetadataMap = new Map<string, any>();
-            Object.values(state.machines).forEach(machine => {
-                if (machine.metadata) {
-                    machineMetadataMap.set(machine.id, machine.metadata);
+            // Track unread: detect when agent finishes all work for a request.
+            // "Was active" = thinking or had pending permission requests.
+            // "Now idle" = online, not thinking, no pending permissions.
+            let unreadSessionIds = state.unreadSessionIds;
+            sessions.forEach(session => {
+                const oldSession = state.sessions[session.id];
+                if (!oldSession) return;
+                const wasActive = oldSession.thinking === true
+                    || (oldSession.agentState?.requests && Object.keys(oldSession.agentState.requests).length > 0);
+                const newSession = mergedSessions[session.id];
+                if (!newSession || !wasActive) return;
+                const isNowIdle = newSession.thinking !== true
+                    && newSession.presence === 'online'
+                    && (!newSession.agentState?.requests || Object.keys(newSession.agentState.requests).length === 0);
+                if (isNowIdle && state.currentViewingSessionId !== session.id) {
+                    if (!unreadSessionIds.has(session.id)) {
+                        unreadSessionIds = new Set(unreadSessionIds);
+                        unreadSessionIds.add(session.id);
+                    }
                 }
             });
-            projectManager.updateSessions(Object.values(mergedSessions), machineMetadataMap);
+
+            // Build new unified list view data
+            const sessionListViewData = buildSessionListViewData(
+                mergedSessions,
+                unreadSessionIds,
+            );
 
             return {
                 ...state,
                 sessions: mergedSessions,
                 sessionsData: listData,  // Legacy - to be removed
                 sessionListViewData,
-                sessionMessages: updatedSessionMessages
+                sessionMessages: updatedSessionMessages,
+                unreadSessionIds,
             };
         }),
         applyLoaded: () => set((state) => {
@@ -598,11 +668,13 @@ export const storage = create<StorageState>()((set, get) => {
             set((state) => {
 
                 // Resolve session messages state
-                const existingSession = state.sessionMessages[sessionId] || {
+                const existingSession: SessionMessages = state.sessionMessages[sessionId] || {
                     messages: [],
                     messagesMap: {},
                     reducerState: createReducer(),
-                    isLoaded: false
+                    isLoaded: false,
+                    hasMoreOlder: false,
+                    isLoadingOlder: false
                 };
 
                 // Get the session's agentState if available
@@ -670,19 +742,7 @@ export const storage = create<StorageState>()((set, get) => {
                 };
             });
 
-            // Persist plan mode change
-            if (shouldEnterPlanMode) {
-                const allModes: Record<string, string> = {};
-                const currentState = get();
-                Object.entries(currentState.sessions).forEach(([id, sess]) => {
-                    if (sess.permissionMode && sess.permissionMode !== 'default') {
-                        allModes[id] = sess.permissionMode;
-                    }
-                });
-                saveSessionPermissionModes(allModes);
-            }
-
-            return { changed: Array.from(changed), hasReadyEvent };
+            return { changed: Array.from(changed), hasReadyEvent, enteredPlanMode: shouldEnterPlanMode };
         },
         applyMessagesLoaded: (sessionId: string) => set((state) => {
             const existingSession = state.sessionMessages[sessionId];
@@ -734,7 +794,9 @@ export const storage = create<StorageState>()((set, get) => {
                             reducerState,
                             messages,
                             messagesMap,
-                            isLoaded: true
+                            isLoaded: true,
+                            hasMoreOlder: false,
+                            isLoadingOlder: false
                         } satisfies SessionMessages
                     }
                 };
@@ -752,6 +814,46 @@ export const storage = create<StorageState>()((set, get) => {
             }
 
             return result;
+        }),
+        applyOlderMessagesPagination: (sessionId: string, info: { hasMore: boolean }) => set((state) => {
+            const existing = state.sessionMessages[sessionId];
+            if (!existing) {
+                // Pagination metadata is only meaningful once the session has
+                // a SessionMessages entry. The fetch path always creates one
+                // through applyMessages / applyMessagesLoaded before calling
+                // this — but if for any reason it hasn't, ignore the update
+                // rather than synthesize a partial entry.
+                return state;
+            }
+            return {
+                ...state,
+                sessionMessages: {
+                    ...state.sessionMessages,
+                    [sessionId]: {
+                        ...existing,
+                        hasMoreOlder: info.hasMore
+                    } satisfies SessionMessages
+                }
+            };
+        }),
+        applyOlderMessagesLoading: (sessionId: string, isLoading: boolean) => set((state) => {
+            const existing = state.sessionMessages[sessionId];
+            if (!existing) {
+                return state;
+            }
+            if (existing.isLoadingOlder === isLoading) {
+                return state;
+            }
+            return {
+                ...state,
+                sessionMessages: {
+                    ...state.sessionMessages,
+                    [sessionId]: {
+                        ...existing,
+                        isLoadingOlder: isLoading
+                    } satisfies SessionMessages
+                }
+            };
         }),
         applySettingsLocal: (settings: Partial<Settings>) => set((state) => {
             saveSettings(applySettings(state.settings, settings), state.settingsVersion ?? 0);
@@ -799,23 +901,37 @@ export const storage = create<StorageState>()((set, get) => {
                 profile
             };
         }),
-        applyGitStatus: (sessionId: string, status: GitStatus | null) => set((state) => {
-            // Update project git status as well
-            projectManager.updateSessionProjectGitStatus(sessionId, status);
-
+        applyGitStatus: (pathKey: string, status: GitStatus | null) => set((state) => ({
+            ...state,
+            pathGitStatus: {
+                ...state.pathGitStatus,
+                [pathKey]: status
+            }
+        })),
+        applyGitStatusFiles: (pathKey: string, files: GitStatusFiles | null) => set((state) => {
+            // Short-circuit on no-op writes. gitStatusSync.invalidate fires on every
+            // mutable-tool message and on every update-session, but most of those
+            // don't actually change the file set. Without this guard, every fetch
+            // produces a fresh object reference, the useSessionGitStatusFiles
+            // subscription fires, and AllFilesDiffView nukes its scroll position
+            // and re-runs every git diff. fast-deep-equal handles arrays + nested
+            // objects so we don't have to enumerate fields.
+            if (equal(state.pathGitStatusFiles[pathKey] ?? null, files)) {
+                return state;
+            }
             return {
                 ...state,
-                sessionGitStatus: {
-                    ...state.sessionGitStatus,
-                    [sessionId]: status
+                pathGitStatusFiles: {
+                    ...state.pathGitStatusFiles,
+                    [pathKey]: files
                 }
             };
         }),
-        applyGitStatusFiles: (sessionId: string, files: GitStatusFiles | null) => set((state) => ({
+        applyProjectFiles: (pathKey: string, files: ProjectFilesList | null) => set((state) => ({
             ...state,
-            sessionGitStatusFiles: {
-                ...state.sessionGitStatusFiles,
-                [sessionId]: files
+            pathProjectFiles: {
+                ...state.pathProjectFiles,
+                [pathKey]: files
             }
         })),
         applyFileCache: (sessionId: string, filePath: string, content: string | null, diff: string | null, isBinary: boolean) => set((state) => ({
@@ -916,69 +1032,31 @@ export const storage = create<StorageState>()((set, get) => {
             return {
                 ...state,
                 sessions: updatedSessions,
-                sessionListViewData: buildSessionListViewData(updatedSessions)
+                sessionListViewData: buildSessionListViewData(updatedSessions, state.unreadSessionIds)
             };
         }),
-        updateSessionPermissionMode: (sessionId: string, mode: string) => set((state) => {
+        // Permission / model / effort picks are local mirrors of synced session
+        // metadata (#1492). Use sessionSetAgentModes from ops.ts to change them —
+        // it calls this for the optimistic update and pushes the pick to the server.
+        updateSessionAgentModes: (sessionId: string, patch: SessionAgentModesPatch) => set((state) => {
             const session = state.sessions[sessionId];
             if (!session) return state;
 
-            // Update the session with the new permission mode
-            const updatedSessions = {
-                ...state.sessions,
-                [sessionId]: {
-                    ...session,
-                    permissionMode: mode
-                }
-            };
-
-            // Collect all permission modes for persistence
-            const allModes: Record<string, string> = {};
-            Object.entries(updatedSessions).forEach(([id, sess]) => {
-                if (sess.permissionMode && sess.permissionMode !== 'default') {
-                    allModes[id] = sess.permissionMode;
-                }
-            });
-
-            // Persist permission modes (only non-default values to save space)
-            saveSessionPermissionModes(allModes);
-
-            // No need to rebuild sessionListViewData since permission mode doesn't affect the list display
+            // No need to rebuild sessionListViewData since mode picks don't affect the list display
             return {
                 ...state,
-                sessions: updatedSessions
-            };
-        }),
-        updateSessionModelMode: (sessionId: string, mode: string) => set((state) => {
-            const session = state.sessions[sessionId];
-            if (!session) return state;
-
-            // Update the session with the new model mode
-            const updatedSessions = {
-                ...state.sessions,
-                [sessionId]: {
-                    ...session,
-                    modelMode: mode
+                sessions: {
+                    ...state.sessions,
+                    [sessionId]: {
+                        ...session,
+                        ...(patch.permissionMode !== undefined && { permissionMode: patch.permissionMode }),
+                        ...(patch.modelMode !== undefined && { modelMode: patch.modelMode }),
+                        ...(patch.effortLevel !== undefined && { effortLevel: patch.effortLevel }),
+                    }
                 }
             };
-
-            // Persist model modes so the selection survives app restart (#1028).
-            // Only non-default values are kept — matches the permissionMode pattern above.
-            const allModes: Record<string, string> = {};
-            Object.entries(updatedSessions).forEach(([id, sess]) => {
-                if (sess.modelMode && sess.modelMode !== 'default') {
-                    allModes[id] = sess.modelMode;
-                }
-            });
-            saveSessionModelModes(allModes);
-
-            // No need to rebuild sessionListViewData since model mode doesn't affect the list display
-            return {
-                ...state,
-                sessions: updatedSessions
-            };
         }),
-        updateSessionEffortLevel: (sessionId: string, level: string) => set((state) => {
+        markSessionMessageSent: (sessionId: string) => set((state) => {
             const session = state.sessions[sessionId];
             if (!session) return state;
 
@@ -986,36 +1064,32 @@ export const storage = create<StorageState>()((set, get) => {
                 ...state.sessions,
                 [sessionId]: {
                     ...session,
-                    effortLevel: level
+                    lastMessageSentAt: Date.now()
                 }
             };
 
-            // Persist effort levels so the selection survives app restart (#1028).
-            const allLevels: Record<string, string> = {};
+            // Persist so activity ordering survives app restart.
+            const allTimestamps: Record<string, number> = {};
             Object.entries(updatedSessions).forEach(([id, sess]) => {
-                if (sess.effortLevel) {
-                    allLevels[id] = sess.effortLevel;
+                if (sess.lastMessageSentAt) {
+                    allTimestamps[id] = sess.lastMessageSentAt;
                 }
             });
-            saveSessionEffortLevels(allLevels);
+            saveSessionLastMessageSentAt(allTimestamps);
 
+            // Rebuild list view data — this timestamp drives activity-based sort.
+            // Pass unreadSessionIds so other sessions keep their unread badges
+            // (omitting it drops every badge until the next rebuild).
             return {
                 ...state,
-                sessions: updatedSessions
+                sessions: updatedSessions,
+                sessionListViewData: buildSessionListViewData(updatedSessions, state.unreadSessionIds)
             };
         }),
-        // Project management methods
-        getProjects: () => projectManager.getProjects(),
-        getProject: (projectId: string) => projectManager.getProject(projectId),
-        getProjectForSession: (sessionId: string) => projectManager.getProjectForSession(sessionId),
-        getProjectSessions: (projectId: string) => projectManager.getProjectSessions(projectId),
-        // Project git status methods
-        getProjectGitStatus: (projectId: string) => projectManager.getProjectGitStatus(projectId),
-        getSessionProjectGitStatus: (sessionId: string) => projectManager.getSessionProjectGitStatus(sessionId),
-        updateSessionProjectGitStatus: (sessionId: string, status: GitStatus | null) => {
-            projectManager.updateSessionProjectGitStatus(sessionId, status);
-            // Trigger a state update to notify hooks
-            set((state) => ({ ...state }));
+        getSessionPathKey: (sessionId: string): string | null => {
+            const session = get().sessions[sessionId];
+            if (!session?.metadata?.machineId || !session?.metadata?.path) return null;
+            return `${session.metadata.machineId}:${session.metadata.path}`;
         },
         applyMachines: (machines: Machine[], replace: boolean = false) => set((state) => {
             // Either replace all machines or merge updates
@@ -1037,7 +1111,8 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Rebuild sessionListViewData to reflect machine changes
             const sessionListViewData = buildSessionListViewData(
-                state.sessions
+                state.sessions,
+                state.unreadSessionIds
             );
 
             return {
@@ -1054,7 +1129,7 @@ export const storage = create<StorageState>()((set, get) => {
             return {
                 ...state,
                 machines: remaining,
-                sessionListViewData: buildSessionListViewData(state.sessions)
+                sessionListViewData: buildSessionListViewData(state.sessions, state.unreadSessionIds)
             };
         }),
         // Artifact methods
@@ -1108,37 +1183,26 @@ export const storage = create<StorageState>()((set, get) => {
             // Remove session messages if they exist
             const { [sessionId]: deletedMessages, ...remainingSessionMessages } = state.sessionMessages;
             
-            // Remove session git status if it exists
-            const { [sessionId]: deletedGitStatus, ...remainingGitStatus } = state.sessionGitStatus;
-            const { [sessionId]: _gitStatusFiles, ...remainingGitStatusFiles } = state.sessionGitStatusFiles;
             const { [sessionId]: _fileCache, ...remainingFileCache } = state.sessionFileCache;
 
-            // Clear drafts, permission modes, model modes, effort levels from persistent storage
+            // Clear local session data from persistent storage (permission / model / effort
+            // picks live in synced session metadata, #1492)
             const drafts = loadSessionDrafts();
             delete drafts[sessionId];
             saveSessionDrafts(drafts);
 
-            const modes = loadSessionPermissionModes();
-            delete modes[sessionId];
-            saveSessionPermissionModes(modes);
+            const lastMessageSentAt = loadSessionLastMessageSentAt();
+            delete lastMessageSentAt[sessionId];
+            saveSessionLastMessageSentAt(lastMessageSentAt);
 
-            const modelModes = loadSessionModelModes();
-            delete modelModes[sessionId];
-            saveSessionModelModes(modelModes);
-
-            const effortLevels = loadSessionEffortLevels();
-            delete effortLevels[sessionId];
-            saveSessionEffortLevels(effortLevels);
-            
-            // Rebuild sessionListViewData without the deleted session
-            const sessionListViewData = buildSessionListViewData(remainingSessions);
+            // Rebuild sessionListViewData without the deleted session.
+            // Pass unreadSessionIds so the remaining sessions keep their unread badges.
+            const sessionListViewData = buildSessionListViewData(remainingSessions, state.unreadSessionIds);
             
             return {
                 ...state,
                 sessions: remainingSessions,
                 sessionMessages: remainingSessionMessages,
-                sessionGitStatus: remainingGitStatus,
-                sessionGitStatusFiles: remainingGitStatusFiles,
                 sessionFileCache: remainingFileCache,
                 sessionListViewData
             };
@@ -1266,6 +1330,41 @@ export const storage = create<StorageState>()((set, get) => {
             feedLoaded: false,  // Reset loading flag
             friendsLoaded: false  // Reset loading flag
         })),
+        markSessionRead: (sessionId: string) => set((state) => {
+            if (!state.unreadSessionIds.has(sessionId)) return state;
+            const next = new Set(state.unreadSessionIds);
+            next.delete(sessionId);
+            return {
+                ...state,
+                unreadSessionIds: next,
+                sessionListViewData: buildSessionListViewData(state.sessions, next),
+            };
+        }),
+        markSessionUnread: (sessionId: string) => set((state) => {
+            if (state.unreadSessionIds.has(sessionId)) return state;
+            const next = new Set(state.unreadSessionIds);
+            next.add(sessionId);
+            return {
+                ...state,
+                unreadSessionIds: next,
+                sessionListViewData: buildSessionListViewData(state.sessions, next),
+            };
+        }),
+        setCurrentViewingSession: (sessionId: string | null) => set((state) => {
+            if (state.currentViewingSessionId === sessionId) return state;
+            // If switching to a new session, mark it as read
+            const next = sessionId && state.unreadSessionIds.has(sessionId)
+                ? (() => { const s = new Set(state.unreadSessionIds); s.delete(sessionId); return s; })()
+                : state.unreadSessionIds;
+            return {
+                ...state,
+                currentViewingSessionId: sessionId,
+                unreadSessionIds: next,
+                ...(next !== state.unreadSessionIds ? {
+                    sessionListViewData: buildSessionListViewData(state.sessions, next),
+                } : {}),
+            };
+        }),
     }
 });
 
@@ -1277,14 +1376,53 @@ export function useSession(id: string): Session | null {
     return storage(useShallow((state) => state.sessions[id] ?? null));
 }
 
+/**
+ * Resolve the live "side chat" sessions belonging to a given parent session.
+ * A side chat is a forked child flagged `metadata.isSideChat` whose
+ * `metadata.parentSessionId` points at the parent. A parent can have several;
+ * closing one archives it (`lifecycleState === 'archived'`), which drops it
+ * from this list so the sidebar panel only shows open side chats. Sorted
+ * oldest-first so tab order stays stable as new ones are created. Empty when
+ * none are open (the panel then offers to start one).
+ */
+export function useSideChatSessions(parentSessionId: string | null): Session[] {
+    return storage(useShallow((state) => {
+        if (!parentSessionId) {
+            return emptyArray as Session[];
+        }
+        const result: Session[] = [];
+        for (const session of Object.values(state.sessions)) {
+            if (
+                session.metadata?.isSideChat
+                && session.metadata?.parentSessionId === parentSessionId
+                && session.metadata?.lifecycleState !== 'archived'
+            ) {
+                result.push(session);
+            }
+        }
+        if (result.length === 0) {
+            return emptyArray as Session[];
+        }
+        result.sort((a, b) => a.createdAt - b.createdAt);
+        return result;
+    }));
+}
+
 const emptyArray: unknown[] = [];
 
-export function useSessionMessages(sessionId: string): { messages: Message[], isLoaded: boolean } {
+export function useSessionMessages(sessionId: string): {
+    messages: Message[],
+    isLoaded: boolean,
+    hasMoreOlder: boolean,
+    isLoadingOlder: boolean
+} {
     return storage(useShallow((state) => {
         const session = state.sessionMessages[sessionId];
         return {
             messages: session?.messages ?? emptyArray,
-            isLoaded: session?.isLoaded ?? false
+            isLoaded: session?.isLoaded ?? false,
+            hasMoreOlder: session?.hasMoreOlder ?? false,
+            isLoadingOlder: session?.isLoadingOlder ?? false
         };
     }));
 }
@@ -1343,7 +1481,10 @@ export function useSessionListViewData(): SessionListViewItem[] | null {
 export function useAllSessions(): Session[] {
     return storage(useShallow((state) => {
         if (!state.isDataReady) return [];
-        return Object.values(state.sessions).sort((a, b) => b.updatedAt - a.updatedAt);
+        // Side chats are hidden children — exclude them from every list.
+        return Object.values(state.sessions)
+            .filter((s) => !s.metadata?.isSideChat)
+            .sort((a, b) => b.updatedAt - a.updatedAt);
     }));
 }
 
@@ -1355,33 +1496,12 @@ export function useLocalSettingMutable<K extends keyof LocalSettings>(name: K): 
     return [value, setValue];
 }
 
-// Project management hooks
-export function useProjects() {
-    return storage(useShallow((state) => state.getProjects()));
-}
-
-export function useProject(projectId: string | null) {
-    return storage(useShallow((state) => projectId ? state.getProject(projectId) : null));
-}
-
-export function useProjectForSession(sessionId: string | null) {
-    return storage(useShallow((state) => sessionId ? state.getProjectForSession(sessionId) : null));
-}
-
-export function useProjectSessions(projectId: string | null) {
-    return storage(useShallow((state) => projectId ? state.getProjectSessions(projectId) : []));
-}
-
-export function useProjectGitStatus(projectId: string | null) {
-    return storage(useShallow((state) => projectId ? state.getProjectGitStatus(projectId) : null));
-}
-
-export function useSessionProjectGitStatus(sessionId: string | null) {
-    return storage(useShallow((state) => sessionId ? state.getSessionProjectGitStatus(sessionId) : null));
-}
-
 export function useLocalSetting<K extends keyof LocalSettings>(name: K): LocalSettings[K] {
     return storage(useShallow((state) => state.localSettings[name]));
+}
+
+export function useIsSessionUnread(sessionId: string): boolean {
+    return storage((state) => state.unreadSessionIds.has(sessionId));
 }
 
 // Artifact hooks
@@ -1449,11 +1569,24 @@ export function useSocketStatus() {
 }
 
 export function useSessionGitStatus(sessionId: string): GitStatus | null {
-    return storage(useShallow((state) => state.sessionGitStatus[sessionId] ?? null));
+    return storage(useShallow((state) => {
+        const pathKey = state.getSessionPathKey(sessionId);
+        return pathKey ? state.pathGitStatus[pathKey] ?? null : null;
+    }));
 }
 
 export function useSessionGitStatusFiles(sessionId: string): GitStatusFiles | null {
-    return storage(useShallow((state) => state.sessionGitStatusFiles[sessionId] ?? null));
+    return storage(useShallow((state) => {
+        const pathKey = state.getSessionPathKey(sessionId);
+        return pathKey ? state.pathGitStatusFiles[pathKey] ?? null : null;
+    }));
+}
+
+export function useSessionProjectFiles(sessionId: string): ProjectFilesList | null {
+    return storage(useShallow((state) => {
+        const pathKey = state.getSessionPathKey(sessionId);
+        return pathKey ? state.pathProjectFiles[pathKey] ?? null : null;
+    }));
 }
 
 export function useSessionFileCache(sessionId: string, filePath: string) {

@@ -83,12 +83,14 @@ export const es: TranslationStructure = {
         permissionRequired: 'permiso requerido',
         activeNow: 'Activo ahora',
         unknown: 'desconocido',
+        unread: 'nuevos resultados',
     },
 
     time: {
         justNow: 'ahora mismo',
         minutesAgo: ({ count }: { count: number }) => `hace ${count} minuto${count !== 1 ? 's' : ''}`,
         hoursAgo: ({ count }: { count: number }) => `hace ${count} hora${count !== 1 ? 's' : ''}`,
+        daysAgo: ({ count }: { count: number }) => `hace ${count} día${count !== 1 ? 's' : ''}`,
     },
 
     connect: {
@@ -159,6 +161,27 @@ export const es: TranslationStructure = {
             light: 'Usar siempre tema claro',
             dark: 'Usar siempre tema oscuro',
         },
+        chat: 'Chat',
+        chatDescription: 'Personaliza la apariencia de los mensajes del chat',
+        sessionStatusBar: 'Información de estado de la sesión',
+        sessionStatusBarDescription: 'Elige dónde aparecen la rama, el modelo, el esfuerzo y el contexto',
+        sessionStatusDisplayOptions: {
+            hidden: 'Oculto',
+            above: 'Sobre el compositor',
+            below: 'Bajo el compositor',
+        },
+        usageLimitShowRemaining: 'Mostrar cuota restante',
+        usageLimitShowRemainingDescription: 'Los indicadores de límite cuentan hacia atrás en vez de hacia adelante',
+        userMessageBubbleColor: 'Color de tus mensajes',
+        userMessageBubbleColorDescription: 'Haz que tus mensajes sean más fáciles de encontrar en chats largos',
+        userMessageBubbleColorOptions: {
+            blue: 'Azul',
+            green: 'Verde',
+            purple: 'Morado',
+            rose: 'Rosa',
+            sand: 'Arena',
+            gray: 'Gris',
+        },
         display: 'Pantalla',
         displayDescription: 'Controla diseño y espaciado',
         inlineToolCalls: 'Llamadas a herramientas en línea',
@@ -209,11 +232,15 @@ export const es: TranslationStructure = {
         markdownCopyV2Subtitle: 'Pulsación larga abre modal de copiado',
         hideInactiveSessions: 'Ocultar sesiones inactivas',
         hideInactiveSessionsSubtitle: 'Muestra solo los chats activos en tu lista',
+        groupToolCalls: 'Agrupar llamadas a herramientas',
+        groupToolCallsSubtitle: 'Contrae las llamadas consecutivas a herramientas en un solo contenedor',
         privacy: 'Privacidad',
         privacyDescription: 'Desactiva completamente toda la analítica y telemetría. No se enviarán datos a PostHog ni a ningún otro servicio de seguimiento.',
         disableAnalytics: 'Desactivar analítica',
         analyticsDisabled: 'Todo el seguimiento y telemetría desactivados',
         analyticsEnabled: 'Analítica anónima de uso activa',
+        imageUpload: 'Subida de imágenes',
+        imageUploadSubtitle: 'Adjunta imágenes a los mensajes para que los agentes compatibles las analicen',
     },
 
     errors: {
@@ -286,6 +313,26 @@ export const es: TranslationStructure = {
         inputPlaceholder: 'Escriba un mensaje ...',
         inactiveArchived: 'Esta sesión está inactiva.',
         resumeFromTerminal: 'Para reanudarla desde la terminal:',
+        newChat: 'Chat nuevo',
+        statusBarContext: 'Contexto',
+        statusBarPathTitle: 'Directorio de trabajo',
+        forkAction: 'Bifurcar sesión',
+        forkSubtitle: 'Continuar en una nueva sesión con el mismo contexto',
+        duplicateAction: 'Duplicar desde un mensaje…',
+        duplicateSubtitle: 'Volver a un punto elegido e intentarlo de nuevo',
+        forkFromHere: 'Bifurcar desde aquí',
+        duplicateSheetTitle: 'Elige un punto de retroceso',
+        duplicateSheetSubtitle: 'La nueva sesión conservará el turno elegido completo (tu mensaje y la respuesta del agente) y descartará los siguientes mensajes.',
+        duplicateSheetConfirm: 'Duplicar',
+        duplicateSheetEmpty: 'Aún no hay mensajes elegibles para retroceder en esta sesión.',
+        duplicateRowDisabled: 'Este mensaje no se puede usar como punto de retroceso.',
+        forkedFromLabel: 'Bifurcado de',
+        forkedFromSubtitle: 'Abrir la sesión de la que se bifurcó',
+        forkErrorOffline: 'Esta máquina está fuera de línea. Bifurcar solo está disponible mientras la máquina de la sesión esté en línea.',
+        forkErrorMissingUuid: 'El punto de retroceso elegido ya no existe en la sesión origen — intenta bifurcar sin truncar.',
+        forkErrorMissingMetadata: 'Faltan metadatos de la sesión necesarios para bifurcar.',
+        forkErrorGeneric: 'No se pudo bifurcar la sesión.',
+        forkClaudeOnly: 'La bifurcación actualmente solo se admite para sesiones de Claude.',
     },
 
     commandPalette: {
@@ -387,6 +434,21 @@ export const es: TranslationStructure = {
             scanQrCode: 'Escanee el código QR',
             openCamera: 'Abrir cámara',
         },
+        agentGoalBar: {
+            currentGoal: 'Objetivo actual',
+            accessibilityLabel: ({ goal }: { goal: string }) => `Objetivo actual: ${goal}`,
+            clearGoal: 'Borrar objetivo',
+            stopGoal: 'Detener objetivo',
+            editGoal: 'Editar objetivo',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Contexto ${used} de ${total} tokens, ${percent}%`,
+            limitFiveHour: 'Límite de 5 horas',
+            limitSevenDay: 'Límite de 7 días',
+            limitResets: ({ time }: { time: string }) => `se restablece ${time}`,
+            limitAsOf: ({ age }: { age: string }) => `hace ${age}`,
+            limitRemaining: ({ percent }: { percent: number }) => `${percent}% restante`,
+        },
     },
 
     agentInput: {
@@ -420,6 +482,10 @@ export const es: TranslationStructure = {
             readOnly: 'Read Only Mode',
             safeYolo: 'Safe YOLO',
             yolo: 'YOLO',
+            defaultDescription: 'preguntar antes de comandos no confiables',
+            readOnlyDescription: 'sin escritura',
+            safeYoloDescription: 'sin preguntas, sandbox del espacio de trabajo',
+            yoloDescription: 'sin preguntas, acceso completo',
             badgeReadOnly: 'Read Only Mode',
             badgeSafeYolo: 'Safe YOLO',
             badgeYolo: 'YOLO',
@@ -465,11 +531,28 @@ export const es: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: 'Mostrar archivadas',
         hideArchived: 'Ocultar archivadas',
+        newSession: 'Nueva sesión',
+    },
+
+    zen: {
+        toggle: 'Modo zen',
     },
 
     toolView: {
         input: 'Entrada',
         output: 'Salida',
+    },
+
+    toolGroup: {
+        editedFile: 'Edited file',
+        editedFiles: ({ count }: { count: number }) => count === 1 ? 'Se editó 1 archivo' : `Se editaron ${count} archivos`,
+        readFiles: ({ count }: { count: number }) => count === 1 ? 'Se leyó 1 archivo' : `Se leyeron ${count} archivos`,
+        ranCommands: ({ count }: { count: number }) => count === 1 ? 'Se ejecutó 1 comando' : `Se ejecutaron ${count} comandos`,
+        searched: ({ count }: { count: number }) => count === 1 ? 'Se buscó 1 vez' : `Se buscó ${count} veces`,
+        fetchedUrls: ({ count }: { count: number }) => count === 1 ? 'Se obtuvo 1 URL' : `Se obtuvieron ${count} URLs`,
+        ranTasks: ({ count }: { count: number }) => count === 1 ? 'Se ejecutó 1 tarea' : `Se ejecutaron ${count} tareas`,
+        usedTools: ({ count }: { count: number }) => count === 1 ? 'Se usó 1 herramienta' : `Se usaron ${count} herramientas`,
+        workedFor: ({ duration }: { duration: string }) => `Worked ${duration}`,
     },
 
     tools: {
@@ -564,6 +647,31 @@ export const es: TranslationStructure = {
         noChangesTitle: 'Sin cambios',
         noChangesSubtitle: 'El árbol de trabajo está limpio',
         deleted: 'Eliminado',
+        changedFiles: ({ count }: { count: number }) => `${count} ${count === 1 ? 'archivo modificado' : 'archivos modificados'}`,
+        allFiles: 'Todos los archivos',
+        addPanel: 'Añadir panel',
+        closePanel: 'Cerrar panel',
+        editFile: 'Editar',
+        saveFile: 'Guardar',
+        failedToRead: 'Error al leer el archivo',
+        failedToSave: 'Error al guardar el archivo',
+        fileConflict: 'Conflicto de archivo',
+        fileConflictDescription: 'Este archivo fue modificado en el dispositivo mientras lo editabas. Recarga para ver la última versión.',
+        reload: 'Recargar',
+        overwrite: 'Sobrescribir',
+    },
+    sideChat: {
+        panelTitle: 'Chat lateral',
+        emptyTitle: 'Inicia un chat lateral',
+        emptySubtitle: 'Pregunta algo al agente por separado. Hereda el contexto de este chat pero permanece aislado — nada de aquí afecta a la conversación principal.',
+        startButton: 'Iniciar chat lateral',
+        creating: 'Iniciando chat lateral…',
+        unavailable: 'Esta sesión aún no puede iniciar un chat lateral — espera a que el agente esté en línea.',
+        composerPlaceholder: 'Mensaje al chat lateral…',
+        expand: 'Abrir en pantalla completa',
+        tabLabel: ({ index }: { index: number }) => `Chat lateral ${index}`,
+        newChat: 'Nuevo chat lateral',
+        close: 'Cerrar chat lateral',
     },
 
     settingsVoice: {
@@ -786,6 +894,7 @@ export const es: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `Cambiado al modo ${mode}`,
         unknownEvent: 'Evento desconocido',
         usageLimitUntil: ({ time }: { time: string }) => `Límite de uso alcanzado hasta ${time}`,
+        sentAsGoal: 'Sent as goal',
         unknownTime: 'tiempo desconocido',
     },
 
@@ -916,6 +1025,21 @@ export const es: TranslationStructure = {
         usageOverTime: 'Uso a lo largo del tiempo',
         byModel: 'Por modelo',
         noData: 'No hay datos de uso disponibles',
+    },
+
+    imageUpload: {
+        permissionTitle: 'Acceso a la biblioteca de fotos',
+        permissionMessage: 'Permite el acceso a tu biblioteca de fotos para adjuntar imágenes a los mensajes.',
+        limitTitle: 'Límite de imágenes alcanzado',
+        limitMessage: ({ max }: { max: number }) => `Puedes adjuntar hasta ${max} imágenes por mensaje.`,
+        fileTooLargeTitle: 'Archivo demasiado grande',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}" supera el límite de ${maxMb}MB y no se añadió.`,
+        uploadFailedTitle: 'Error al subir',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? 'No se pudo subir una imagen y no se envió.'
+            : `No se pudieron subir ${count} imágenes y no se enviaron.`,
+        notSupportedTitle: 'Imágenes no compatibles',
+        notSupportedMessage: 'Este agente no admite archivos adjuntos de imagen. Las imágenes no se enviaron.',
     },
 
     feed: {

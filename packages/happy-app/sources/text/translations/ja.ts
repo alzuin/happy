@@ -85,12 +85,14 @@ export const ja: TranslationStructure = {
         permissionRequired: '権限が必要です',
         activeNow: 'アクティブ',
         unknown: '不明',
+        unread: '新しい結果',
     },
 
     time: {
         justNow: 'たった今',
         minutesAgo: ({ count }: { count: number }) => `${count}分前`,
         hoursAgo: ({ count }: { count: number }) => `${count}時間前`,
+        daysAgo: ({ count }: { count: number }) => `${count}日前`,
     },
 
     connect: {
@@ -160,6 +162,27 @@ export const ja: TranslationStructure = {
             light: '常にライトテーマを使用',
             dark: '常にダークテーマを使用',
         },
+        chat: 'チャット',
+        chatDescription: 'チャットメッセージの見た目をカスタマイズ',
+        sessionStatusBar: 'セッションステータス情報',
+        sessionStatusBarDescription: 'ブランチ、モデル、エフォート、コンテキストの表示場所を選択',
+        sessionStatusDisplayOptions: {
+            hidden: '非表示',
+            above: '入力欄の上',
+            below: '入力欄の下',
+        },
+        usageLimitShowRemaining: '残量を表示',
+        usageLimitShowRemainingDescription: '上限を使用量ではなく残量で表示します',
+        userMessageBubbleColor: 'ユーザーバブルの色',
+        userMessageBubbleColorDescription: '長いチャットで自分のメッセージを見つけやすくします',
+        userMessageBubbleColorOptions: {
+            blue: 'ブルー',
+            green: 'グリーン',
+            purple: 'パープル',
+            rose: 'ローズ',
+            sand: 'サンド',
+            gray: 'グレー',
+        },
         display: '表示',
         displayDescription: 'レイアウトと間隔を調整',
         inlineToolCalls: 'ツール呼び出しをインライン表示',
@@ -210,11 +233,15 @@ export const ja: TranslationStructure = {
         markdownCopyV2Subtitle: '長押しでコピーモーダルを開く',
         hideInactiveSessions: '非アクティブセッションを非表示',
         hideInactiveSessionsSubtitle: 'アクティブなチャットのみをリストに表示',
+        groupToolCalls: 'ツール呼び出しをグループ化',
+        groupToolCallsSubtitle: '連続するツール呼び出しを1つのコンテナにまとめる',
         privacy: 'プライバシー',
         privacyDescription: 'すべての分析とテレメトリを完全に無効にします。PostHogやその他のトラッキングサービスにデータは送信されません。',
         disableAnalytics: '分析を無効化',
         analyticsDisabled: 'すべてのトラッキングとテレメトリが無効',
         analyticsEnabled: '匿名の使用状況分析がアクティブ',
+        imageUpload: '画像アップロード',
+        imageUploadSubtitle: '対応エージェントに分析させるため、メッセージに画像を添付する',
     },
 
     errors: {
@@ -287,6 +314,26 @@ export const ja: TranslationStructure = {
         inputPlaceholder: 'メッセージを入力...',
         inactiveArchived: 'このセッションは非アクティブです。',
         resumeFromTerminal: 'ターミナルから再開するには:',
+        newChat: '新規チャット',
+        statusBarContext: 'コンテキスト',
+        statusBarPathTitle: '作業ディレクトリ',
+        forkAction: 'セッションをフォーク',
+        forkSubtitle: '同じコンテキストで新しいセッションを続行',
+        duplicateAction: 'メッセージから複製…',
+        duplicateSubtitle: '選んだ地点まで巻き戻してやり直す',
+        forkFromHere: 'ここからフォーク',
+        duplicateSheetTitle: '巻き戻しポイントを選択',
+        duplicateSheetSubtitle: '新しいセッションは選んだターン全体（あなたのメッセージとエージェントの応答）を保持し、それ以降のメッセージは破棄します。',
+        duplicateSheetConfirm: '複製',
+        duplicateSheetEmpty: 'このセッションには巻き戻し可能なメッセージがまだありません。',
+        duplicateRowDisabled: 'このメッセージは巻き戻しポイントに使えません。',
+        forkedFromLabel: 'フォーク元',
+        forkedFromSubtitle: 'フォーク元のセッションを開く',
+        forkErrorOffline: 'マシンがオフラインです。セッションのマシンがオンラインの間のみフォークできます。',
+        forkErrorMissingUuid: '選んだ巻き戻しポイントがソースセッションに存在しません — 切り詰めなしのフォークをお試しください。',
+        forkErrorMissingMetadata: 'フォークに必要なセッションのメタデータがありません。',
+        forkErrorGeneric: 'セッションのフォークに失敗しました。',
+        forkClaudeOnly: 'フォークは現在 Claude セッションのみ対応しています。',
     },
 
     commandPalette: {
@@ -388,6 +435,21 @@ export const ja: TranslationStructure = {
             scanQrCode: 'QRコードをスキャン',
             openCamera: 'カメラを開く',
         },
+        agentGoalBar: {
+            currentGoal: '現在の目標',
+            accessibilityLabel: ({ goal }: { goal: string }) => `現在の目標: ${goal}`,
+            clearGoal: '目標をクリア',
+            stopGoal: '目標を停止',
+            editGoal: '目標を編集',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `コンテキスト ${total}トークン中${used}、${percent}%`,
+            limitFiveHour: '5時間の上限',
+            limitSevenDay: '7日間の上限',
+            limitResets: ({ time }: { time: string }) => `${time} リセット`,
+            limitAsOf: ({ age }: { age: string }) => `${age}前のデータ`,
+            limitRemaining: ({ percent }: { percent: number }) => `残り ${percent}%`,
+        },
     },
 
     agentInput: {
@@ -421,6 +483,10 @@ export const ja: TranslationStructure = {
             readOnly: '読み取り専用モード',
             safeYolo: 'セーフYOLO',
             yolo: 'YOLO',
+            defaultDescription: '信頼されていないコマンドの前に確認',
+            readOnlyDescription: '書き込みなし',
+            safeYoloDescription: '確認なし、ワークスペースサンドボックス',
+            yoloDescription: '確認なし、フルアクセス',
             badgeReadOnly: '読み取り専用モード',
             badgeSafeYolo: 'セーフYOLO',
             badgeYolo: 'YOLO',
@@ -466,11 +532,28 @@ export const ja: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: 'アーカイブを表示',
         hideArchived: 'アーカイブを非表示',
+        newSession: '新しいセッション',
+    },
+
+    zen: {
+        toggle: 'Zenモード',
     },
 
     toolView: {
         input: '入力',
         output: '出力',
+    },
+
+    toolGroup: {
+        editedFile: 'Edited file',
+        editedFiles: ({ count }: { count: number }) => `${count}個のファイルを編集`,
+        readFiles: ({ count }: { count: number }) => `${count}個のファイルを読み取り`,
+        ranCommands: ({ count }: { count: number }) => `${count}個のコマンドを実行`,
+        searched: ({ count }: { count: number }) => `${count}回検索`,
+        fetchedUrls: ({ count }: { count: number }) => `${count}個のURLを取得`,
+        ranTasks: ({ count }: { count: number }) => `${count}個のタスクを実行`,
+        usedTools: ({ count }: { count: number }) => `${count}個のツールを使用`,
+        workedFor: ({ duration }: { duration: string }) => `Worked ${duration}`,
     },
 
     tools: {
@@ -565,6 +648,31 @@ export const ja: TranslationStructure = {
         noChangesTitle: '変更なし',
         noChangesSubtitle: 'ワーキングツリーはクリーンです',
         deleted: '削除済み',
+        changedFiles: ({ count }: { count: number }) => `${count}件の変更ファイル`,
+        allFiles: 'すべてのファイル',
+        addPanel: 'パネルを追加',
+        closePanel: 'パネルを閉じる',
+        editFile: '編集',
+        saveFile: '保存',
+        failedToRead: 'ファイルの読み取りに失敗しました',
+        failedToSave: 'ファイルの保存に失敗しました',
+        fileConflict: 'ファイルの競合',
+        fileConflictDescription: '編集中にデバイス上でファイルが変更されました。最新版を表示するには再読み込みしてください。',
+        reload: '再読み込み',
+        overwrite: '上書き',
+    },
+    sideChat: {
+        panelTitle: 'サイドチャット',
+        emptyTitle: 'サイドチャットを始める',
+        emptySubtitle: 'エージェントに脇で質問しましょう。このチャットのコンテキストを引き継ぎますが独立しており — ここでの操作はメインの会話に影響しません。',
+        startButton: 'サイドチャットを開始',
+        creating: 'サイドチャットを開始しています…',
+        unavailable: 'このセッションではまだサイドチャットを開始できません — エージェントがオンラインになるまでお待ちください。',
+        composerPlaceholder: 'サイドチャットにメッセージ…',
+        expand: '全画面で開く',
+        tabLabel: ({ index }: { index: number }) => `サイドチャット ${index}`,
+        newChat: '新しいサイドチャット',
+        close: 'サイドチャットを閉じる',
     },
 
     settingsVoice: {
@@ -787,6 +895,7 @@ export const ja: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `${mode}モードに切り替えました`,
         unknownEvent: '不明なイベント',
         usageLimitUntil: ({ time }: { time: string }) => `${time}まで使用制限中`,
+        sentAsGoal: 'Sent as goal',
         unknownTime: '不明な時間',
     },
 
@@ -917,6 +1026,21 @@ export const ja: TranslationStructure = {
         usageOverTime: '使用量の推移',
         byModel: 'モデル別',
         noData: '使用データがありません',
+    },
+
+    imageUpload: {
+        permissionTitle: 'フォトライブラリへのアクセス',
+        permissionMessage: 'メッセージに画像を添付するには、フォトライブラリへのアクセスを許可してください。',
+        limitTitle: '画像の上限に達しました',
+        limitMessage: ({ max }: { max: number }) => `1メッセージに添付できる画像は最大${max}枚です。`,
+        fileTooLargeTitle: 'ファイルが大きすぎます',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}"は${maxMb}MBの制限を超えているため追加されませんでした。`,
+        uploadFailedTitle: 'アップロードに失敗しました',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? '1枚の画像をアップロードできず、送信されませんでした。'
+            : `${count}枚の画像をアップロードできず、送信されませんでした。`,
+        notSupportedTitle: '画像はサポートされていません',
+        notSupportedMessage: 'このエージェントは画像の添付に対応していません。画像は送信されませんでした。',
     },
 
     feed: {

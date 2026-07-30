@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator, Linking } from 'react-native';
+import { View, ActivityIndicator, Platform } from 'react-native';
+import { openExternalUrl } from '@/utils/openExternalUrl';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Text } from '@/components/StyledText';
 import { useAuth } from '@/auth/AuthContext';
@@ -214,13 +215,7 @@ export default function UserProfileScreen() {
                     title={t('settings.github')}
                     detail={`@${userProfile.username}`} 
                     icon={<Ionicons name="logo-github" size={29} color={theme.colors.text} />}
-                    onPress={async () => {
-                        const url = `https://github.com/${userProfile.username}`;
-                        const supported = await Linking.canOpenURL(url);
-                        if (supported) {
-                            await Linking.openURL(url);
-                        }
-                    }}
+                    onPress={() => openExternalUrl(`https://github.com/${userProfile.username}`)}
                 />
             </ItemGroup>
 
@@ -256,13 +251,13 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: Platform.select({ web: theme.colors.groupped.background, default: 'transparent' }),
     },
     errorContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: Platform.select({ web: theme.colors.groupped.background, default: 'transparent' }),
         padding: 32,
     },
     errorText: {
@@ -280,8 +275,11 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: 32,
         backgroundColor: theme.colors.surface,
         marginTop: 16,
-        borderRadius: 12,
+        borderRadius: Platform.select({ web: 12, default: 22 }),
         marginHorizontal: 16,
+        overflow: 'hidden',
+        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
+        borderColor: theme.colors.divider,
     },
     displayName: {
         fontSize: 24,

@@ -98,12 +98,14 @@ export const en: TranslationStructure = {
         permissionRequired: 'permission required',
         activeNow: 'Active now',
         unknown: 'unknown',
+        unread: 'new results',
     },
 
     time: {
         justNow: 'just now',
         minutesAgo: ({ count }: { count: number }) => `${count} minute${count !== 1 ? 's' : ''} ago`,
         hoursAgo: ({ count }: { count: number }) => `${count} hour${count !== 1 ? 's' : ''} ago`,
+        daysAgo: ({ count }: { count: number }) => `${count} day${count !== 1 ? 's' : ''} ago`,
     },
 
     connect: {
@@ -173,6 +175,27 @@ export const en: TranslationStructure = {
             light: 'Always use light theme',
             dark: 'Always use dark theme',
         },
+        chat: 'Chat',
+        chatDescription: 'Customize chat message appearance',
+        sessionStatusBar: 'Session Status Info',
+        sessionStatusBarDescription: 'Choose where branch, model, effort, and context appear',
+        sessionStatusDisplayOptions: {
+            hidden: 'Hidden',
+            above: 'Above composer',
+            below: 'Below composer',
+        },
+        usageLimitShowRemaining: 'Show Quota Remaining',
+        usageLimitShowRemainingDescription: 'Count plan limits down from full instead of up from empty',
+        userMessageBubbleColor: 'User Bubble Color',
+        userMessageBubbleColorDescription: 'Make your messages easier to spot in long chats',
+        userMessageBubbleColorOptions: {
+            blue: 'Blue',
+            green: 'Green',
+            purple: 'Purple',
+            rose: 'Rose',
+            sand: 'Sand',
+            gray: 'Gray',
+        },
         display: 'Display',
         displayDescription: 'Control layout and spacing',
         inlineToolCalls: 'Inline Tool Calls',
@@ -223,11 +246,15 @@ export const en: TranslationStructure = {
         markdownCopyV2Subtitle: 'Long press opens copy modal',
         hideInactiveSessions: 'Hide inactive sessions',
         hideInactiveSessionsSubtitle: 'Show only active chats in your list',
+        groupToolCalls: 'Group Tool Calls',
+        groupToolCallsSubtitle: 'Collapse consecutive tool calls into one container',
         privacy: 'Privacy',
         privacyDescription: 'Completely disables all analytics and telemetry. No data will be sent to PostHog or any other tracking service.',
         disableAnalytics: 'Disable Analytics',
         analyticsDisabled: 'All tracking and telemetry disabled',
         analyticsEnabled: 'Anonymous usage analytics active',
+        imageUpload: 'Image Upload',
+        imageUploadSubtitle: 'Attach images to messages for supported agents to analyze',
     },
 
     errors: {
@@ -300,6 +327,26 @@ export const en: TranslationStructure = {
         inputPlaceholder: 'Type a message ...',
         inactiveArchived: 'This session is inactive.',
         resumeFromTerminal: 'To resume it from the terminal:',
+        newChat: 'New chat',
+        statusBarContext: 'Context',
+        statusBarPathTitle: 'Working directory',
+        forkAction: 'Fork session',
+        forkSubtitle: 'Continue in a new session with the same context',
+        duplicateAction: 'Duplicate from message…',
+        duplicateSubtitle: 'Rewind to a chosen point and try again',
+        forkFromHere: 'Fork from here',
+        duplicateSheetTitle: 'Choose a rewind point',
+        duplicateSheetSubtitle: 'The new session keeps the chosen turn complete (your message and the agent’s response) and drops every prompt after it.',
+        duplicateSheetConfirm: 'Duplicate',
+        duplicateSheetEmpty: 'No messages eligible for rewind in this session yet.',
+        duplicateRowDisabled: "This message can't be used as a rewind point.",
+        forkedFromLabel: 'Forked from',
+        forkedFromSubtitle: 'Open the session this fork was branched from',
+        forkErrorOffline: 'This machine is offline. Fork is only available while the machine that owns the session is online.',
+        forkErrorMissingUuid: 'The chosen rewind point is no longer present in the source session — try forking without truncation.',
+        forkErrorMissingMetadata: 'Missing session metadata required to fork.',
+        forkErrorGeneric: 'Failed to fork the session.',
+        forkClaudeOnly: 'Fork is currently only supported for Claude sessions.',
     },
 
     commandPalette: {
@@ -401,6 +448,21 @@ export const en: TranslationStructure = {
             scanQrCode: 'Scan the QR code',
             openCamera: 'Open Camera',
         },
+        agentGoalBar: {
+            currentGoal: 'Current goal',
+            accessibilityLabel: ({ goal }: { goal: string }) => `Current goal: ${goal}`,
+            clearGoal: 'Clear goal',
+            stopGoal: 'Stop goal',
+            editGoal: 'Edit goal',
+        },
+        sessionStatusBar: {
+            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Context ${used} of ${total} tokens, ${percent}%`,
+            limitFiveHour: '5-hour limit',
+            limitSevenDay: '7-day limit',
+            limitResets: ({ time }: { time: string }) => `resets ${time}`,
+            limitAsOf: ({ age }: { age: string }) => `as of ${age} ago`,
+            limitRemaining: ({ percent }: { percent: number }) => `${percent}% left`,
+        },
     },
 
     agentInput: {
@@ -434,6 +496,10 @@ export const en: TranslationStructure = {
             readOnly: 'read-only',
             safeYolo: 'safe yolo',
             yolo: 'yolo',
+            defaultDescription: 'ask before untrusted commands',
+            readOnlyDescription: 'no writes',
+            safeYoloDescription: 'no prompts, workspace sandbox',
+            yoloDescription: 'no prompts, full access',
             badgeReadOnly: 'read-only',
             badgeSafeYolo: 'safe yolo',
             badgeYolo: 'yolo',
@@ -479,11 +545,28 @@ export const en: TranslationStructure = {
         sessionsTitle: 'Happy',
         showArchived: 'Show archived',
         hideArchived: 'Hide archived',
+        newSession: 'New session',
+    },
+
+    zen: {
+        toggle: 'Zen mode',
     },
 
     toolView: {
         input: 'Input',
         output: 'Output',
+    },
+
+    toolGroup: {
+        editedFile: 'Edited file',
+        editedFiles: ({ count }: { count: number }) => count === 1 ? 'Edited 1 file' : `Edited ${count} files`,
+        readFiles: ({ count }: { count: number }) => count === 1 ? 'Read 1 file' : `Read ${count} files`,
+        ranCommands: ({ count }: { count: number }) => count === 1 ? 'Ran 1 command' : `Ran ${count} commands`,
+        searched: ({ count }: { count: number }) => count === 1 ? 'Searched 1 time' : `Searched ${count} times`,
+        fetchedUrls: ({ count }: { count: number }) => count === 1 ? 'Fetched 1 URL' : `Fetched ${count} URLs`,
+        ranTasks: ({ count }: { count: number }) => count === 1 ? 'Ran 1 task' : `Ran ${count} tasks`,
+        usedTools: ({ count }: { count: number }) => count === 1 ? 'Used 1 tool' : `Used ${count} tools`,
+        workedFor: ({ duration }: { duration: string }) => `Worked ${duration}`,
     },
 
     tools: {
@@ -578,6 +661,31 @@ export const en: TranslationStructure = {
         noChangesTitle: 'No changes',
         noChangesSubtitle: 'Working tree is clean',
         deleted: 'Deleted',
+        changedFiles: ({ count }: { count: number }) => `${count} changed ${count === 1 ? 'file' : 'files'}`,
+        allFiles: 'All Files',
+        addPanel: 'Add panel',
+        closePanel: 'Close panel',
+        editFile: 'Edit',
+        saveFile: 'Save',
+        failedToRead: 'Failed to read file',
+        failedToSave: 'Failed to save file',
+        fileConflict: 'File conflict',
+        fileConflictDescription: 'This file was modified on the device while you were editing. Reload to see the latest version.',
+        reload: 'Reload',
+        overwrite: 'Overwrite',
+    },
+    sideChat: {
+        panelTitle: 'Side chat',
+        emptyTitle: 'Start a side chat',
+        emptySubtitle: 'Ask the agent something on the side. It inherits this chat’s context but stays isolated — nothing here touches the main conversation.',
+        startButton: 'Start side chat',
+        creating: 'Starting side chat…',
+        unavailable: 'This session can’t start a side chat yet — wait for the agent to come online.',
+        composerPlaceholder: 'Message side chat…',
+        expand: 'Open full screen',
+        tabLabel: ({ index }: { index: number }) => `Side chat ${index}`,
+        newChat: 'New side chat',
+        close: 'Close side chat',
     },
 
     settingsVoice: {
@@ -800,6 +908,7 @@ export const en: TranslationStructure = {
         switchedToMode: ({ mode }: { mode: string }) => `Switched to ${mode} mode`,
         unknownEvent: 'Unknown event',
         usageLimitUntil: ({ time }: { time: string }) => `Usage limit reached until ${time}`,
+        sentAsGoal: 'Sent as goal',
         unknownTime: 'unknown time',
     },
 
@@ -930,6 +1039,21 @@ export const en: TranslationStructure = {
         usageOverTime: 'Usage over time',
         byModel: 'By Model',
         noData: 'No usage data available',
+    },
+
+    imageUpload: {
+        permissionTitle: 'Photo Library Access',
+        permissionMessage: 'Allow access to your photo library to attach images to messages.',
+        limitTitle: 'Image Limit Reached',
+        limitMessage: ({ max }: { max: number }) => `You can attach up to ${max} images per message.`,
+        fileTooLargeTitle: 'File Too Large',
+        fileTooLargeMessage: ({ name, maxMb }: { name: string; maxMb: number }) => `"${name}" exceeds the ${maxMb}MB limit and was not added.`,
+        uploadFailedTitle: 'Upload Failed',
+        uploadFailedMessage: ({ count }: { count: number }) => count === 1
+            ? 'One image could not be uploaded and was not sent.'
+            : `${count} images could not be uploaded and were not sent.`,
+        notSupportedTitle: 'Images Not Supported',
+        notSupportedMessage: 'This agent does not support image attachments. Images were not sent.',
     },
 
     feed: {
