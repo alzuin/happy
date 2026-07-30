@@ -102,6 +102,10 @@ export function getClaudeModelModes(): ModelMode[] {
         { key: 'claude-opus-5', name: 'opus 5', description: null },
         { key: 'opus', name: 'opus 4.8', description: null },
         { key: 'fable', name: 'fable 5', description: null },
+        // Full model ID for the same reason as opus 5 above: `sonnet-5` is only
+        // an alias, so an older CLI without it in its table would fail, while
+        // the full ID passes straight through to the API.
+        { key: 'claude-sonnet-5', name: 'sonnet 5', description: null },
         { key: 'sonnet', name: 'sonnet 4.6', description: null },
         { key: 'haiku', name: 'haiku 4.5', description: null },
     ];
