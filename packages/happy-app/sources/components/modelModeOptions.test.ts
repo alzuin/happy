@@ -59,6 +59,7 @@ describe('modelModeOptions', () => {
             'claude-opus-5',
             'opus',
             'fable',
+            'claude-sonnet-5',
             'sonnet',
             'haiku',
         ]);
