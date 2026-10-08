@@ -19,18 +19,24 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY scripts ./scripts
 COPY patches ./patches
 
-RUN mkdir -p packages/happy-app packages/happy-server packages/happy-cli packages/happy-agent packages/happy-wire
+RUN mkdir -p packages/happy-app packages/happy-server packages/happy-cli packages/happy-agent packages/happy-wire packages/happy-server-self-host
 
 COPY packages/happy-app/package.json packages/happy-app/
 COPY packages/happy-server/package.json packages/happy-server/
 COPY packages/happy-cli/package.json packages/happy-cli/
 COPY packages/happy-agent/package.json packages/happy-agent/
 COPY packages/happy-wire/package.json packages/happy-wire/
+COPY packages/happy-server-self-host/package.json packages/happy-server-self-host/
 
 COPY packages/happy-app/patches packages/happy-app/patches
 COPY packages/happy-server/prisma packages/happy-server/prisma
 COPY packages/happy-cli/scripts packages/happy-cli/scripts
 COPY packages/happy-cli/tools packages/happy-cli/tools
+# postinstall requirement: this package's own postinstall.cjs runs at install
+# time and exits gracefully if prisma/schema.prisma isn't there yet (it never
+# is in a fresh checkout — that file is a build artifact), but the script
+# itself must exist for pnpm to invoke it.
+COPY packages/happy-server-self-host/scripts packages/happy-server-self-host/scripts
 
 RUN SKIP_HAPPY_WIRE_BUILD=1 pnpm install --frozen-lockfile
 
@@ -39,6 +45,7 @@ FROM deps AS builder
 
 COPY packages/happy-wire ./packages/happy-wire
 COPY packages/happy-server ./packages/happy-server
+COPY packages/happy-server-self-host ./packages/happy-server-self-host
 
 # Build happy-wire so its dist/ is available when deploy bundles it.
 RUN pnpm --filter @slopus/happy-wire build
@@ -51,6 +58,17 @@ RUN pnpm --filter happy-server-self-host deploy --legacy /deploy
 # sources/ is excluded by the package's `files` array (publishable list).
 # Copy it manually — the CMD uses tsx to run TypeScript directly from source.
 RUN cp -r packages/happy-server/sources /deploy/sources
+
+RUN cp packages/happy-server/tsconfig.json /deploy/tsconfig.json
+
+# prisma/ is a build artifact of happy-server-self-host (normally produced by
+# build-runtime.cjs, which we skip since it shells out to bun). standalone.ts
+# resolves prisma/migrations relative to process.cwd(), so it must physically
+# exist at /deploy/prisma, not just be on the Prisma Client's generator path.
+RUN cp -r packages/happy-server/prisma /deploy/prisma
+
+RUN cd /deploy && PATH="/deploy/node_modules/.bin:$PATH" \
+    ./node_modules/.bin/prisma generate --schema prisma/schema.prisma
 
 # Patch pglite-prisma-adapter Bytes handling in the isolated /deploy.
 # The workspace postinstall.cjs patched /repo/node_modules; /deploy has its
