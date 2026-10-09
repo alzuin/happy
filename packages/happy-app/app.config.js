@@ -68,6 +68,11 @@ export default {
         ios: {
             supportsTablet: true,
             bundleIdentifier: bundleId,
+            // Written into DEVELOPMENT_TEAM for every build configuration on each prebuild.
+            // `expo prebuild` regenerates the Xcode project, which otherwise wipes the team and
+            // brings back "Signing requires a development team" after every prebuild.
+            // Override with APPLE_TEAM_ID to build under a different team.
+            appleTeamId: process.env.APPLE_TEAM_ID ?? "CPG65STBJW",
             config: {
                 usesNonExemptEncryption: false
             },
