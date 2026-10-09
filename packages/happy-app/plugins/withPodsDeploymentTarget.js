@@ -1,6 +1,4 @@
-const { withDangerousMod } = require('@expo/config-plugins');
-const fs = require('fs');
-const path = require('path');
+const { injectPostInstall, withPodfilePostInstall } = require('./podfilePostInstall');
 
 /**
  * Raises every CocoaPods target's IPHONEOS_DEPLOYMENT_TARGET to a floor.
@@ -41,29 +39,19 @@ function buildSnippet(minIos) {
 }
 
 function patchPodfile(contents, minIos) {
-  if (contents.includes(MARKER)) {
-    return contents; // already patched — keep prebuild idempotent
-  }
-  const postInstall = /^(\s*post_install do \|installer\|\s*\n)/m;
-  if (!postInstall.test(contents)) {
-    throw new Error(
-      'withPodsDeploymentTarget: could not find `post_install do |installer|` in the ' +
-      'generated Podfile. The Expo Podfile template has changed; update this plugin.'
-    );
-  }
-  return contents.replace(postInstall, `$1${buildSnippet(minIos)}`);
+  return injectPostInstall(contents, {
+    marker: MARKER,
+    snippet: buildSnippet(minIos),
+    pluginName: 'withPodsDeploymentTarget',
+  });
 }
 
 module.exports = function withPodsDeploymentTarget(config, { minIos = DEFAULT_MIN_IOS } = {}) {
-  return withDangerousMod(config, [
-    'ios',
-    async (cfg) => {
-      const podfilePath = path.join(cfg.modRequest.platformProjectRoot, 'Podfile');
-      const original = fs.readFileSync(podfilePath, 'utf8');
-      fs.writeFileSync(podfilePath, patchPodfile(original, minIos));
-      return cfg;
-    },
-  ]);
+  return withPodfilePostInstall(config, {
+    marker: MARKER,
+    snippet: buildSnippet(minIos),
+    pluginName: 'withPodsDeploymentTarget',
+  });
 };
 
 module.exports.patchPodfile = patchPodfile;
