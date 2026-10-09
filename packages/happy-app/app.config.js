@@ -142,6 +142,7 @@ export default {
             require("./plugins/withEinkCompatibility.js"),
             require("./plugins/withIosDeploymentTarget.js"),
             require("./plugins/withIosSceneLifecycle.js"),
+            require("./plugins/withIosUserScriptSandboxingOff.js"),
             require("./plugins/withRevenueCatXcode27Fix.js"),
             [
                 "expo-router",
