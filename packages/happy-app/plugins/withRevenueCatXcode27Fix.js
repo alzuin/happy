@@ -34,26 +34,37 @@ const MARKER = '# happy: backport RevenueCat Xcode 27 PaywallColor fix';
 // about, and to keep correct, than a regular expression.
 const SNIPPET = `
     ${MARKER}
-    paywall_color = File.join(installer.sandbox.root.to_s, 'RevenueCat', 'Sources', 'Paywalls', 'PaywallColor.swift')
-    if File.exist?(paywall_color)
-      designated_init = [
-        '    /// "Designated" initializer',
-        '    private init(stringRepresentation: String, underlyingColor: (any Sendable)?) {',
-        '        self.stringRepresentation = stringRepresentation',
-        '        self._underlyingColor = underlyingColor',
-        '    }',
-      ].join("\\n") + "\\n"
-      # Pre-fix layout: the init sits in a trailing \`private extension\`...
-      misplaced = designated_init + "\\n"
-      # ...and the struct body ends right after this stored property.
-      struct_anchor = "    fileprivate var _underlyingColor: (any Sendable)?\\n\\n"
-      source = File.read(paywall_color)
-      if source.include?(misplaced) && source.include?(struct_anchor)
-        source = source.sub(misplaced) { '' }
-        source = source.sub(struct_anchor) { struct_anchor + designated_init }
-        File.chmod(0644, paywall_color)
-        File.write(paywall_color, source)
-        Pod::UI.puts '[happy] patched RevenueCat PaywallColor.swift for Xcode 27'
+    revenuecat_dir = File.join(installer.sandbox.root.to_s, 'RevenueCat')
+    paywall_color = File.join(revenuecat_dir, 'Sources', 'Paywalls', 'PaywallColor.swift')
+    if File.directory?(revenuecat_dir)
+      if !File.exist?(paywall_color)
+        Pod::UI.warn '[happy] RevenueCat is installed but PaywallColor.swift is not where expected; Xcode 27 patch NOT applied'
+      else
+        designated_init = [
+          '    /// "Designated" initializer',
+          '    private init(stringRepresentation: String, underlyingColor: (any Sendable)?) {',
+          '        self.stringRepresentation = stringRepresentation',
+          '        self._underlyingColor = underlyingColor',
+          '    }',
+        ].join("\\n") + "\\n"
+        # Pre-fix layout: the init sits in a trailing \`private extension\`...
+        misplaced = designated_init + "\\n"
+        # ...and the struct body ends right after this stored property.
+        struct_anchor = "    fileprivate var _underlyingColor: (any Sendable)?\\n\\n"
+        source = File.read(paywall_color)
+        if source.include?(misplaced) && source.include?(struct_anchor)
+          source = source.sub(misplaced) { '' }
+          source = source.sub(struct_anchor) { struct_anchor + designated_init }
+          File.chmod(0644, paywall_color)
+          File.write(paywall_color, source)
+          Pod::UI.puts '[happy] patched RevenueCat PaywallColor.swift for Xcode 27'
+        elsif source.include?(designated_init)
+          Pod::UI.puts '[happy] RevenueCat PaywallColor.swift already has the Xcode 27 fix'
+        else
+          # Never skip silently: an unpatched file reproduces the original
+          # "ambiguous use of init(stringRepresentation:)" build error.
+          Pod::UI.warn '[happy] RevenueCat PaywallColor.swift has an unexpected layout; Xcode 27 patch NOT applied'
+        end
       end
     end
 `;
