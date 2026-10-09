@@ -67,6 +67,23 @@ export async function startApi(opts: StartApiOptions = {}) {
         app.get('/', function (request, reply) {
             reply.send('Welcome to Happy Server!');
         });
+    } else {
+        // ...but the mobile app's "Save server URL" step does GET / with
+        // `Accept: text/plain` and rejects any server whose body does not
+        // contain this exact banner (happy-app sources/app/(app)/server.tsx).
+        // Serving the web client at / would therefore make a self-hosted relay
+        // impossible to pair from a native app. Answer that probe by content
+        // negotiation: a plain-text client gets the banner, a browser still
+        // gets the SPA index from @fastify/static.
+        app.addHook('onRequest', async (request, reply) => {
+            if (request.method !== 'GET') return;
+            const [pathname] = request.url.split('?');
+            if (pathname !== '/') return;
+            const accept = request.headers.accept ?? '';
+            if (!accept.includes('text/plain') || accept.includes('text/html')) return;
+            reply.type('text/plain; charset=utf-8').send('Welcome to Happy Server!');
+            return reply;
+        });
     }
 
     // Create typed provider

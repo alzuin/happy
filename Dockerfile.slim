@@ -88,6 +88,16 @@ ENV PGLITE_DIR=/data/pglite
 
 COPY --from=builder /deploy /app
 
+# The exported Happy web client, served by the relay itself so a browser (phone
+# included) gets the same UI as the native apps. standalone.ts's findStaticDir()
+# looks for <cwd>/webapp, and the CMD below runs with WORKDIR /app.
+#
+# This is a prebuilt artifact, not produced in-image: expo export needs the full
+# happy-app workspace, which the slim builder stage deliberately does not carry.
+# Build it on the host before `podman build` (it is plain Node, no macOS needed):
+#   pnpm --dir packages/happy-app exec expo export -p web --output-dir dist
+COPY packages/happy-app/dist /app/webapp
+
 VOLUME /data
 EXPOSE 3005
 

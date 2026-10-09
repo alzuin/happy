@@ -5,6 +5,10 @@
 node_modules
 **/node_modules
 **/dist
+# Exception: the relay image bakes in the exported web client (Dockerfile.slim
+# copies it to /app/webapp, where standalone.ts's findStaticDir picks it up).
+# Build it first with: pnpm --dir packages/happy-app exec expo export -p web --output-dir dist
+!packages/happy-app/dist
 **/.claude
 **/.expo
 **/.turbo
